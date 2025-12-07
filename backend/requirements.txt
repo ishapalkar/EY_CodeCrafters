@@ -28,3 +28,6 @@ aiohttp
 
 # --- Environment variables ---
 python-dotenv
+
+# --- Redis Database ---
+redis
