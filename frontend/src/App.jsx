@@ -2,6 +2,7 @@ import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import { Button } from './components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
 import Chat from './components/Chat';
+import KioskChat from './components/KioskChat';
 
 function App() {
   return (
@@ -10,6 +11,7 @@ function App() {
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/chat" element={<Chat />} />
+          <Route path="/kiosk" element={<KioskChat />} />
         </Routes>
       </div>
     </Router>
@@ -72,9 +74,14 @@ function HomePage() {
         </div>
         
         <div className="flex gap-4 mt-8">
+          <Link to="/kiosk">
+            <Button size="lg" className="animate-button-hover bg-gradient-to-r from-[#8B1538] to-[#D4AF37]">
+              ABFRL Kiosk Chat
+            </Button>
+          </Link>
           <Link to="/chat">
-            <Button size="lg" className="animate-button-hover">
-              Open AI Sales Chat
+            <Button size="lg" variant="outline">
+              WhatsApp Style Chat
             </Button>
           </Link>
           <Button size="lg" variant="outline">
