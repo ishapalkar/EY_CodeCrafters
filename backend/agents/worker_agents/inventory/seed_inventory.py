@@ -12,9 +12,9 @@ import redis_utils
 
 
 def seed_online_inventory():
-    """Seed online inventory from merged_products_902_rows.csv (default qty = 500)."""
+    """Seed online inventory from products.csv (default qty = 500)."""
     
-    csv_path = Path(__file__).parent.parent.parent.parent / "data" / "merged_products_902_rows.csv"
+    csv_path = Path(__file__).parent.parent.parent.parent / "data" / "products.csv"
     
     if not csv_path.exists():
         print(f"❌ CSV file not found: {csv_path}")
@@ -41,9 +41,9 @@ def seed_online_inventory():
 
 
 def seed_store_inventory():
-    """Seed store inventory from inventory_realistic.csv."""
+    """Seed store inventory from inventory.csv."""
     
-    csv_path = Path(__file__).parent.parent.parent.parent / "data" / "inventory_realistic.csv"
+    csv_path = Path(__file__).parent.parent.parent.parent / "data" / "inventory.csv"
     
     if not csv_path.exists():
         print(f"❌ CSV file not found: {csv_path}")
@@ -63,8 +63,9 @@ def seed_store_inventory():
             qty = int(row['qty'])
             
             # Set store stock
-            location = f"store:{store_id}"
-            redis_utils.set_stock(sku, qty, location)
+            # IMPORTANT: Pass just "STORE_MUMBAI", not "store:STORE_MUMBAI"
+            # The set_stock function adds "store:" prefix automatically
+            redis_utils.set_stock(sku, qty, store_id)
             
             count += 1
             stores_seen.add(store_id)

@@ -4,7 +4,7 @@ Integration Test Script for Inventory → Payment → Fulfillment Workflow
 
 This script validates the complete order fulfillment flow using real CSV data
 from the data/ folder. It tests the integration of three microservices:
-- Inventory Agent (port 8002)
+- Inventory Agent (port 8001)
 - Payment Agent (port 8003)  
 - Fulfillment Agent (port 8004)
 
@@ -29,7 +29,7 @@ import sys
 # ============================================================================
 
 # Agent URLs
-INVENTORY_AGENT_URL = "http://localhost:8002"
+INVENTORY_AGENT_URL = "http://localhost:8001"  # Fixed: Inventory runs on 8001, not 8002
 PAYMENT_AGENT_URL = "http://localhost:8003"
 FULFILLMENT_AGENT_URL = "http://localhost:8004"
 
@@ -137,10 +137,13 @@ def check_inventory_availability(sku: str, quantity: int, inventory_df: pd.DataF
         store_qty = best_store['qty']
         
         # Now attempt to create a hold at this specific store
+        # IMPORTANT: Inventory Agent expects "store:STORE_ID" format, not just "STORE_ID"
+        location = f"store:{store_id}" if not store_id.startswith("store:") else store_id
+        
         hold_request = {
             "sku": sku,
             "quantity": quantity,
-            "location": store_id,  # Use actual store ID from CSV
+            "location": location,  # Format: "store:STORE_MUMBAI"
             "ttl": 600  # 10 minute hold
         }
         
@@ -173,7 +176,7 @@ def check_inventory_availability(sku: str, quantity: int, inventory_df: pd.DataF
         return {
             "success": False,
             "hold_id": None,
-            "message": "Cannot connect to Inventory Agent. Is it running on port 8002?",
+            "message": "Cannot connect to Inventory Agent. Is it running on port 8001?",
             "available_qty": 0,
             "location": None
         }
@@ -306,11 +309,9 @@ def start_fulfillment(order_id: str, hold_id: str, payment_id: str,
     try:
         fulfillment_request = {
             "order_id": order_id,
-            "customer_id": "CUST001",  # Simplified for testing
-            "total_amount": total_amount,
-            "shipping_address": "Test Address, Mumbai, India",
             "inventory_status": "RESERVED",  # Required by fulfillment agent
             "payment_status": "SUCCESS",      # Required by fulfillment agent
+            "amount": total_amount,  # Fixed: Fulfillment agent expects 'amount', not 'total_amount'
             "inventory_hold_id": hold_id,
             "payment_transaction_id": payment_id
         }
@@ -622,7 +623,7 @@ if __name__ == "__main__":
     ║                  MULTI-AGENT INTEGRATION TEST SUITE                        ║
     ║                                                                            ║
     ║  This script validates the integration of:                                 ║
-    ║    • Inventory Agent (port 8002)                                           ║
+    ║    • Inventory Agent (port 8001)                                           ║
     ║    • Payment Agent (port 8003)                                             ║
     ║    • Fulfillment Agent (port 8004)                                         ║
     ║                                                                            ║
