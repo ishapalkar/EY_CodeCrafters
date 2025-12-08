@@ -1,0 +1,223 @@
+import { useState, useRef, useEffect } from 'react';
+import { Send, Check, CheckCheck, Phone, Video, MoreVertical } from 'lucide-react';
+
+const Chat = () => {
+  const [messages, setMessages] = useState([
+    {
+      id: 1,
+      text: "Hello! I'm your AI Sales Agent. How can I help you today?",
+      sender: 'agent',
+      timestamp: new Date(Date.now() - 120000).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+      status: 'read'
+    }
+  ]);
+  const [inputText, setInputText] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const messagesEndRef = useRef(null);
+
+  // Auto-scroll to bottom when messages change
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, isTyping]);
+
+  // Mock agent responses
+  const mockAgentResponses = [
+    "Sure! Let me check the best options for you.",
+    "I found some great products that match your preferences!",
+    "Would you like me to show you our top recommendations?",
+    "I can help you with that. What's your budget?",
+    "Great choice! Let me find similar items for you.",
+    "I'm checking our inventory for you...",
+    "Based on your preferences, I have some perfect options!"
+  ];
+
+  const handleSendMessage = () => {
+    if (!inputText.trim()) return;
+
+    // Add user message
+    const userMessage = {
+      id: Date.now(),
+      text: inputText,
+      sender: 'user',
+      timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+      status: 'sent'
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setInputText('');
+
+    // Simulate message status updates (sent → delivered → read)
+    setTimeout(() => {
+      setMessages(prev => prev.map(msg => 
+        msg.id === userMessage.id ? { ...msg, status: 'delivered' } : msg
+      ));
+    }, 500);
+
+    setTimeout(() => {
+      setMessages(prev => prev.map(msg => 
+        msg.id === userMessage.id ? { ...msg, status: 'read' } : msg
+      ));
+    }, 1000);
+
+    // Show typing indicator
+    setTimeout(() => {
+      setIsTyping(true);
+    }, 1200);
+
+    // Mock agent response after 1-1.5 seconds
+    setTimeout(() => {
+      setIsTyping(false);
+      const randomResponse = mockAgentResponses[Math.floor(Math.random() * mockAgentResponses.length)];
+      const agentMessage = {
+        id: Date.now() + 1,
+        text: randomResponse,
+        sender: 'agent',
+        timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+        status: 'read'
+      };
+      setMessages(prev => [...prev, agentMessage]);
+    }, 1500);
+  };
+
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
+    }
+  };
+
+  const getMessageStatusIcon = (status) => {
+    switch(status) {
+      case 'sent':
+        return <Check className="w-4 h-4 text-gray-400" />;
+      case 'delivered':
+        return <CheckCheck className="w-4 h-4 text-gray-400" />;
+      case 'read':
+        return <CheckCheck className="w-4 h-4 text-blue-500" />;
+      default:
+        return null;
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-screen bg-[#efeae2]">
+      {/* Header - WhatsApp style */}
+      <div className="bg-[#008069] text-white px-4 py-3 flex items-center justify-between shadow-md">
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <div className="w-10 h-10 rounded-full bg-[#d9d9d9] flex items-center justify-center text-[#128c7e] font-semibold text-lg">
+              AI
+            </div>
+            <div className="absolute bottom-0 right-0 w-3 h-3 bg-[#25d366] rounded-full border-2 border-[#008069]"></div>
+          </div>
+          <div>
+            <h1 className="font-semibold text-base">AI Sales Agent</h1>
+            <p className="text-xs text-[#d9d9d9]">online</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-6">
+          <button className="hover:bg-[#017561] p-2 rounded-full transition-colors">
+            <Video className="w-5 h-5" />
+          </button>
+          <button className="hover:bg-[#017561] p-2 rounded-full transition-colors">
+            <Phone className="w-5 h-5" />
+          </button>
+          <button className="hover:bg-[#017561] p-2 rounded-full transition-colors">
+            <MoreVertical className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Chat Messages Area */}
+      <div 
+        className="flex-1 overflow-y-auto px-4 py-6 space-y-3"
+        style={{
+          backgroundImage: 'url("data:image/svg+xml,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cg fill=\'%23d9d9d9\' fill-opacity=\'0.05\'%3E%3Cpath d=\'M0 0h50v50H0zM50 50h50v50H50z\'/%3E%3C/g%3E%3C/svg%3E")',
+        }}
+      >
+        {messages.map((message) => (
+          <div
+            key={message.id}
+            className={`flex ${message.sender === 'user' ? 'justify-end' : 'justify-start'}`}
+          >
+            <div
+              className={`max-w-[75%] md:max-w-[65%] rounded-lg px-4 py-2 shadow-sm ${
+                message.sender === 'user'
+                  ? 'bg-[#d9fdd3] text-gray-900'
+                  : 'bg-white text-gray-900'
+              }`}
+            >
+              <p className="text-sm leading-relaxed whitespace-pre-wrap break-words">
+                {message.text}
+              </p>
+              <div className={`flex items-center gap-1 justify-end mt-1 ${
+                message.sender === 'user' ? 'text-gray-600' : 'text-gray-500'
+              }`}>
+                <span className="text-[10px]">{message.timestamp}</span>
+                {message.sender === 'user' && getMessageStatusIcon(message.status)}
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {/* Typing Indicator */}
+        {isTyping && (
+          <div className="flex justify-start">
+            <div className="bg-white rounded-lg px-4 py-3 shadow-sm">
+              <div className="flex items-center gap-1">
+                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }}></div>
+                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }}></div>
+                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }}></div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Input Area - WhatsApp style */}
+      <div className="bg-[#f0f2f5] px-4 py-3 border-t border-gray-200">
+        <div className="flex items-end gap-2">
+          <div className="flex-1 bg-white rounded-full px-4 py-2 flex items-center gap-2 shadow-sm">
+            <button className="text-gray-500 hover:text-gray-700">
+              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M9.153 11.603c.795 0 1.439-.879 1.439-1.962s-.644-1.962-1.439-1.962-1.439.879-1.439 1.962.644 1.962 1.439 1.962zm-3.204 1.362c-.026-.307-.131 5.218 6.063 5.551 6.066-.25 6.066-5.551 6.066-5.551-6.078 1.416-12.129 0-12.129 0zm11.363 1.108s-.669 1.959-5.051 1.959c-3.505 0-5.388-1.164-5.607-1.959 0 0 5.912 1.055 10.658 0zM11.804 1.011C5.609 1.011.978 6.033.978 12.228s4.826 10.761 11.021 10.761S23.02 18.423 23.02 12.228c.001-6.195-5.021-11.217-11.216-11.217zM12 21.354c-5.273 0-9.381-3.886-9.381-9.159s3.942-9.548 9.215-9.548 9.548 4.275 9.548 9.548c-.001 5.272-4.109 9.159-9.382 9.159zm3.108-9.751c.795 0 1.439-.879 1.439-1.962s-.644-1.962-1.439-1.962-1.439.879-1.439 1.962.644 1.962 1.439 1.962z"/>
+              </svg>
+            </button>
+            <input
+              type="text"
+              value={inputText}
+              onChange={(e) => setInputText(e.target.value)}
+              onKeyPress={handleKeyPress}
+              placeholder="Type a message"
+              className="flex-1 bg-transparent outline-none text-sm placeholder:text-gray-500"
+            />
+            <button className="text-gray-500 hover:text-gray-700">
+              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M11.999 14.942c2.001 0 3.531-1.53 3.531-3.531V4.35c0-2.001-1.53-3.531-3.531-3.531S8.469 2.35 8.469 4.35v7.061c0 2.001 1.53 3.531 3.53 3.531zm6.238-3.53c0 3.531-2.942 6.002-6.237 6.002s-6.237-2.471-6.237-6.002H3.761c0 4.001 3.178 7.297 7.061 7.885v3.884h2.354v-3.884c3.884-.588 7.061-3.884 7.061-7.885h-2z"/>
+              </svg>
+            </button>
+          </div>
+          <button
+            onClick={handleSendMessage}
+            disabled={!inputText.trim()}
+            className={`rounded-full p-3 transition-all ${
+              inputText.trim()
+                ? 'bg-[#008069] hover:bg-[#017561] text-white'
+                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+            }`}
+          >
+            <Send className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Chat;

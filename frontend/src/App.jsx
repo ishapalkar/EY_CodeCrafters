@@ -1,6 +1,7 @@
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import { Button } from './components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './components/ui/card';
+import Chat from './components/Chat';
 
 function App() {
   return (
@@ -8,6 +9,7 @@ function App() {
       <div className="min-h-screen bg-background">
         <Routes>
           <Route path="/" element={<HomePage />} />
+          <Route path="/chat" element={<Chat />} />
         </Routes>
       </div>
     </Router>
@@ -70,9 +72,11 @@ function HomePage() {
         </div>
         
         <div className="flex gap-4 mt-8">
-          <Button size="lg" className="animate-button-hover">
-            Get Started
-          </Button>
+          <Link to="/chat">
+            <Button size="lg" className="animate-button-hover">
+              Open AI Sales Chat
+            </Button>
+          </Link>
           <Button size="lg" variant="outline">
             Learn More
           </Button>
