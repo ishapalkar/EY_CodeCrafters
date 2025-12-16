@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Check, CheckCheck, Phone, Video, MoreVertical } from 'lucide-react';
+import { Send, Check, CheckCheck, Phone, Video, MoreVertical, Mic, MicOff } from 'lucide-react';
 
 const Chat = () => {
   const [messages, setMessages] = useState([
@@ -13,7 +13,10 @@ const Chat = () => {
   ]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const messagesEndRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const transcriptRef = useRef('');
 
   // Auto-scroll to bottom when messages change
   const scrollToBottom = () => {
@@ -23,6 +26,42 @@ const Chat = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages, isTyping]);
+
+  // Initialize Speech Recognition
+  useEffect(() => {
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = true;
+      recognitionRef.current.lang = 'en-US';
+
+      recognitionRef.current.onresult = (event) => {
+        let finalTranscript = '';
+
+        for (let i = 0; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + ' ';
+          }
+        }
+
+        if (finalTranscript) {
+          transcriptRef.current += finalTranscript;
+          setInputText(transcriptRef.current);
+        }
+      };
+
+      recognitionRef.current.onend = () => {
+        setIsRecording(false);
+      };
+
+      recognitionRef.current.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        setIsRecording(false);
+      };
+    }
+  }, []);
 
   // Mock agent responses
   const mockAgentResponses = [
@@ -87,6 +126,23 @@ const Chat = () => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
+    }
+  };
+
+  const toggleVoiceRecording = () => {
+    if (!recognitionRef.current) {
+      alert('Speech recognition is not supported in your browser. Please use Chrome or Edge.');
+      return;
+    }
+
+    if (isRecording) {
+      recognitionRef.current.stop();
+      setIsRecording(false);
+    } else {
+      transcriptRef.current = '';
+      setInputText('');
+      recognitionRef.current.start();
+      setIsRecording(true);
     }
   };
 
@@ -197,10 +253,16 @@ const Chat = () => {
               placeholder="Type a message"
               className="flex-1 bg-transparent outline-none text-sm placeholder:text-gray-500"
             />
-            <button className="text-gray-500 hover:text-gray-700">
-              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M11.999 14.942c2.001 0 3.531-1.53 3.531-3.531V4.35c0-2.001-1.53-3.531-3.531-3.531S8.469 2.35 8.469 4.35v7.061c0 2.001 1.53 3.531 3.53 3.531zm6.238-3.53c0 3.531-2.942 6.002-6.237 6.002s-6.237-2.471-6.237-6.002H3.761c0 4.001 3.178 7.297 7.061 7.885v3.884h2.354v-3.884c3.884-.588 7.061-3.884 7.061-7.885h-2z"/>
-              </svg>
+            <button 
+              onClick={toggleVoiceRecording}
+              className={`transition-colors ${
+                isRecording 
+                  ? 'text-red-500 hover:text-red-700 animate-pulse' 
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+              title={isRecording ? 'Stop recording' : 'Start voice input'}
+            >
+              {isRecording ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
             </button>
           </div>
           <button

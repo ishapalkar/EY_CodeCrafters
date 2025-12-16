@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Mic, Package, MapPin, User, ShoppingBag } from 'lucide-react';
+import { Send, Mic, MicOff, Package, MapPin, User, ShoppingBag } from 'lucide-react';
 
 const KioskChat = () => {
   const [messages, setMessages] = useState([
@@ -24,7 +24,10 @@ const KioskChat = () => {
   ]);
   const [inputText, setInputText] = useState('');
   const [isTyping, setIsTyping] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
   const messagesEndRef = useRef(null);
+  const recognitionRef = useRef(null);
+  const transcriptRef = useRef('');
 
   // Auto-scroll to bottom
   const scrollToBottom = () => {
@@ -34,6 +37,42 @@ const KioskChat = () => {
   useEffect(() => {
     scrollToBottom();
   }, [messages, isTyping]);
+
+  // Initialize Speech Recognition
+  useEffect(() => {
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = true;
+      recognitionRef.current.lang = 'en-US';
+
+      recognitionRef.current.onresult = (event) => {
+        let finalTranscript = '';
+
+        for (let i = 0; i < event.results.length; i++) {
+          const transcript = event.results[i][0].transcript;
+          if (event.results[i].isFinal) {
+            finalTranscript += transcript + ' ';
+          }
+        }
+
+        if (finalTranscript) {
+          transcriptRef.current += finalTranscript;
+          setInputText(transcriptRef.current);
+        }
+      };
+
+      recognitionRef.current.onend = () => {
+        setIsRecording(false);
+      };
+
+      recognitionRef.current.onerror = (event) => {
+        console.error('Speech recognition error:', event.error);
+        setIsRecording(false);
+      };
+    }
+  }, []);
 
   // Mock bot responses
   const mockBotResponses = [
@@ -90,6 +129,23 @@ const KioskChat = () => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSendMessage();
+    }
+  };
+
+  const toggleVoiceRecording = () => {
+    if (!recognitionRef.current) {
+      alert('Speech recognition is not supported in your browser. Please use Chrome or Edge.');
+      return;
+    }
+
+    if (isRecording) {
+      recognitionRef.current.stop();
+      setIsRecording(false);
+    } else {
+      transcriptRef.current = '';
+      setInputText('');
+      recognitionRef.current.start();
+      setIsRecording(true);
     }
   };
 
@@ -245,10 +301,15 @@ const KioskChat = () => {
                 className="flex-1 bg-gray-50 rounded-xl px-6 py-4 outline-none text-base border border-gray-200 focus:border-[#D4AF37] focus:ring-2 focus:ring-[#D4AF37]/20 transition-all"
               />
               <button
-                className="bg-gray-100 hover:bg-gray-200 text-gray-600 p-4 rounded-xl transition-all duration-300"
-                title="Voice input (Coming soon)"
+                onClick={toggleVoiceRecording}
+                className={`p-4 rounded-xl transition-all duration-300 ${
+                  isRecording 
+                    ? 'bg-red-100 hover:bg-red-200 text-red-600 animate-pulse' 
+                    : 'bg-gray-100 hover:bg-gray-200 text-gray-600'
+                }`}
+                title={isRecording ? 'Stop recording' : 'Start voice input'}
               >
-                <Mic className="w-6 h-6" />
+                {isRecording ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
               </button>
               <button
                 onClick={handleSendMessage}
