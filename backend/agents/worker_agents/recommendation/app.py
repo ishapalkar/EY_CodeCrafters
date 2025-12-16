@@ -191,6 +191,29 @@ class RecommendationResponse(BaseModel):
 # RECOMMENDATION ENGINE
 # ==========================================
 
+def is_valid_response(text: str) -> bool:
+    """Check if LLM response is valid (not gibberish)"""
+    if not text or len(text) < 10:
+        return False
+    
+    # Count printable ASCII characters (letters, numbers, basic punctuation)
+    printable_count = sum(1 for c in text if c.isprintable() and ord(c) < 128)
+    total_chars = len(text)
+    ascii_ratio = printable_count / total_chars if total_chars > 0 else 0
+    
+    # Must have at least 75% ASCII characters
+    if ascii_ratio < 0.75:
+        return False
+    
+    # Check for common English words
+    common_words = ['the', 'you', 'this', 'your', 'is', 'a', 'for', 'and', 'with']
+    text_lower = text.lower()
+    word_count = sum(1 for word in common_words if word in text_lower)
+    
+    # Must contain at least 2 common English words
+    return word_count >= 2
+
+
 def get_customer_profile(customer_id: str) -> Optional[Dict]:
     """Get customer profile from customers.csv"""
     customer = customers_df[customers_df['customer_id'] == int(customer_id)]
@@ -323,7 +346,7 @@ def generate_personalized_reason(
     context: str = "recommendation",
     target_gender: str = None
 ) -> str:
-    """Generate human-like personalized reasoning for recommendation using LLM"""
+    """Generate human-like personalized reasoning for recommendation using LLM with cascading fallbacks"""
     
     name = customer_profile.get('name', 'Customer')
     first_name = name.split()[0]
@@ -349,14 +372,11 @@ def generate_personalized_reason(
         past_brands = past_products['brand'].unique().tolist()
         past_categories = past_products['subcategory'].unique().tolist()
     
-    # Use LLM if available
-    if llm_client:
-        try:
-            gift_context = ""
-            if is_gift:
-                gift_context = f"\n\nIMPORTANT: {first_name} (a {customer_gender}) is shopping for {target_gender} products - this is likely a gift! Mention this thoughtfully in your recommendation."
-            
-            prompt = f"""You are a friendly, knowledgeable shopping assistant. Generate a brief, natural, personalized recommendation reason (1-2 sentences max).
+    gift_context = ""
+    if is_gift:
+        gift_context = f"\n\nIMPORTANT: {first_name} (a {customer_gender}) is shopping for {target_gender} products - this is likely a gift! Mention this thoughtfully in your recommendation."
+    
+    prompt = f"""You are a friendly, knowledgeable shopping assistant. Generate a brief, natural, personalized recommendation reason (1-2 sentences max).
 
 Customer Profile:
 - Name: {first_name}
@@ -380,21 +400,41 @@ Context: This is {"an upsell suggestion" if context == "upsell" else "a cross-se
 
 Write a warm, personalized reason (1-2 sentences) explaining why {first_name} would love this product{" as a gift" if is_gift else ""}. Be specific, mention their history or preferences, and sound like a helpful friend - not a salesperson. Keep it conversational and genuine."""
 
-            if LLM_PROVIDER == "gemini":
-                response = llm_client.generate_content(prompt)
-                return response.text.strip()
+    # CASCADING FALLBACK: Groq → Gemini → Template
+    
+    # Try Groq first (if configured as primary)
+    if LLM_PROVIDER == "groq" and GROQ_AVAILABLE and GROQ_API_KEY:
+        try:
+            groq_client = Groq(api_key=GROQ_API_KEY)
+            response = groq_client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.7,
+                max_tokens=150
+            )
+            llm_response = response.choices[0].message.content.strip()
             
-            elif LLM_PROVIDER == "groq":
-                response = llm_client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.7,
-                    max_tokens=150
-                )
-                return response.choices[0].message.content.strip()
-        
+            if is_valid_response(llm_response):
+                return llm_response
+            else:
+                logger.warning("Groq returned gibberish, trying Gemini fallback")
         except Exception as e:
-            logger.warning(f"LLM generation failed: {e}, falling back to template")
+            logger.warning(f"Groq failed: {e}, trying Gemini fallback")
+    
+    # Fallback to Gemini
+    if GEMINI_AVAILABLE and GEMINI_API_KEY:
+        try:
+            genai.configure(api_key=GEMINI_API_KEY)
+            gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+            response = gemini_model.generate_content(prompt)
+            gemini_response = response.text.strip()
+            
+            if is_valid_response(gemini_response):
+                return gemini_response
+            else:
+                logger.warning("Gemini returned invalid response, using template")
+        except Exception as e:
+            logger.warning(f"Gemini fallback failed: {e}, using template")
     
     # Fallback to template-based reasoning
     reasons = []
@@ -609,16 +649,19 @@ async def _mode_gifting_genius(request: RecommendationRequest, customer_profile:
         
         logger.info(f"   Filtered to {len(filtered)} gender-appropriate gift products")
     
-    # Prefer size-free items
+    # Budget filter (apply BEFORE safe_sizes to maintain gender filtering)
+    budget_min = request.intent.get('budget_min', 0)
+    budget_max = request.intent.get('budget_max', 999999)
+    filtered = filtered[(filtered['price'] >= budget_min) & (filtered['price'] <= budget_max)]
+    
+    # Prefer size-free items (but maintain gender filtering)
     if request.safe_sizes_only:
         size_free = filtered[filtered['category'].isin(['Accessories', 'Personal Care', 'Free Gifts'])]
         if not size_free.empty:
             filtered = size_free
-    
-    # Budget filter
-    budget_min = request.intent.get('budget_min', 0)
-    budget_max = request.intent.get('budget_max', 999999)
-    filtered = filtered[(filtered['price'] >= budget_min) & (filtered['price'] <= budget_max)]
+            logger.info(f"   Narrowed to {len(filtered)} size-free items (maintaining gender filter)")
+        else:
+            logger.info(f"   No size-free items found, keeping all {len(filtered)} products")
     
     # Brand filter
     if request.preferred_brands:
@@ -626,19 +669,69 @@ async def _mode_gifting_genius(request: RecommendationRequest, customer_profile:
         if not brand_match.empty:
             filtered = brand_match
     
-    # Interest matching
+    # Interest matching - match against product name AND category
     if interests:
+        # Map interests to categories
+        interest_category_map = {
+            'jewelry': ['Jewellery', 'Accessories'],
+            'jewellery': ['Jewellery', 'Accessories'],
+            'accessories': ['Accessories', 'Jewellery'],
+            'elegant': ['Accessories', 'Jewellery'],
+            'watches': ['Accessories', 'Watches'],
+            'sports': ['Footwear', 'Apparel', 'Sports Equipment'],
+            'fitness': ['Footwear', 'Apparel', 'Sports Equipment'],
+            'fashion': ['Apparel', 'Accessories'],
+            'trendy': ['Apparel', 'Accessories']
+        }
+        
         scores = []
         for _, product in filtered.iterrows():
-            score = sum(10 for interest in interests if interest.lower() in str(product['ProductDisplayName']).lower())
+            score = 0
+            product_name_lower = str(product['ProductDisplayName']).lower()
+            product_category = str(product['category'])
+            product_subcategory = str(product['subcategory'])
+            
+            for interest in interests:
+                interest_lower = interest.lower()
+                # Direct name match
+                if interest_lower in product_name_lower:
+                    score += 20
+                # Category match
+                if interest_lower in interest_category_map:
+                    for cat in interest_category_map[interest_lower]:
+                        if cat.lower() in product_category.lower() or cat.lower() in product_subcategory.lower():
+                            score += 15
+            
             scores.append(score)
+        
         filtered['interest_score'] = scores
-        filtered = filtered[filtered['interest_score'] > 0].sort_values('interest_score', ascending=False)
+        interest_matches = filtered[filtered['interest_score'] > 0]
+        if not interest_matches.empty:
+            filtered = interest_matches.sort_values('interest_score', ascending=False)
+            logger.info(f"   Found {len(filtered)} products matching interests")
+        else:
+            logger.info(f"   No interest matches, keeping all {len(filtered)} products")
     
+    # Emergency fallback - but MAINTAIN GENDER FILTERING
     if filtered.empty:
+        logger.warning(f"   No matches found, using fallback WITH recipient gender filter")
         filtered = products_df[(products_df['ratings'] >= 4.5) & 
                                (products_df['price'] >= budget_min) & 
                                (products_df['price'] <= budget_max)]
+        
+        # RE-APPLY GENDER FILTER to fallback
+        if recipient_gender in ['male', 'female']:
+            if recipient_gender == 'male':
+                filtered = filtered[
+                    (filtered['ProductDisplayName'].str.contains(r'\b(men|man|boys|men\'s)\b', case=False, na=False, regex=True)) &
+                    (~filtered['ProductDisplayName'].str.contains(r'\b(women|woman|girls|women\'s)\b', case=False, na=False, regex=True))
+                ]
+            else:  # female
+                filtered = filtered[
+                    (filtered['ProductDisplayName'].str.contains(r'\b(women|woman|girls|women\'s)\b', case=False, na=False, regex=True)) &
+                    (~filtered['ProductDisplayName'].str.contains(r'\b(men|man|boys|men\'s)\b', case=False, na=False, regex=True))
+                ]
+            logger.info(f"   Fallback filtered to {len(filtered)} gender-appropriate products")
     
     filtered = filtered.sort_values('ratings', ascending=False)
     
@@ -652,12 +745,13 @@ async def _mode_gifting_genius(request: RecommendationRequest, customer_profile:
             continue
         
         # Generate TWO LLM responses: appropriateness reason + heartfelt message
-        if llm_client:
-            try:
-                interests_text = ', '.join(interests) if interests else 'thoughtful gestures'
-                
-                # 1. Generate appropriateness reasoning (personalized_reason)
-                reason_prompt = f"""You are a gift advisor. Explain in 1-2 sentences why this gift is appropriate for the recipient.
+        gift_reason = None
+        gift_message = None
+        
+        interests_text = ', '.join(interests) if interests else 'thoughtful gestures'
+        
+        # 1. Generate appropriateness reasoning (personalized_reason)
+        reason_prompt = f"""You are a gift advisor. Explain in 1-2 sentences why this gift is appropriate for the recipient.
 
 Gift Context:
 - Recipient: Your {relation} ({recipient_gender})
@@ -671,20 +765,42 @@ Product:
 
 Explain why this specific product is a fitting choice for this person and occasion. Focus on appropriateness, not emotion."""
 
-                if LLM_PROVIDER == "gemini":
-                    response = llm_client.generate_content(reason_prompt)
-                    gift_reason = response.text.strip()
-                elif LLM_PROVIDER == "groq":
-                    response = llm_client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        messages=[{"role": "user", "content": reason_prompt}],
-                        temperature=0.7,
-                        max_tokens=100
-                    )
-                    gift_reason = response.choices[0].message.content.strip()
-                
-                # 2. Generate heartfelt gift message (gift_message)
-                message_prompt = f"""You are writing a heartfelt gift card message. Write a warm, personal message (1-2 sentences) for this gift.
+        # CASCADING FALLBACK: Groq → Gemini → Template
+        # Try Groq first
+        if GROQ_AVAILABLE and GROQ_API_KEY:
+            try:
+                groq_client = Groq(api_key=GROQ_API_KEY)
+                response = groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": reason_prompt}],
+                    temperature=0.7,
+                    max_tokens=100
+                )
+                gift_reason = response.choices[0].message.content.strip()
+                if not is_valid_response(gift_reason):
+                    logger.warning("Groq gift reason invalid, trying Gemini")
+                    gift_reason = None
+            except Exception as e:
+                logger.warning(f"Groq gift reason failed: {e}, trying Gemini")
+        
+        # Fallback to Gemini if Groq failed
+        if not gift_reason and GEMINI_AVAILABLE and GEMINI_API_KEY:
+            try:
+                genai.configure(api_key=GEMINI_API_KEY)
+                gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                response = gemini_model.generate_content(reason_prompt)
+                gift_reason = response.text.strip()
+                if not is_valid_response(gift_reason):
+                    gift_reason = None
+            except Exception as e:
+                logger.warning(f"Gemini gift reason failed: {e}")
+        
+        # Final fallback to template
+        if not gift_reason:
+            gift_reason = f"This {product['subcategory']} is perfect for your {relation} — matches their style and the {occasion} occasion."
+        
+        # 2. Generate heartfelt gift message (gift_message)
+        message_prompt = f"""You are writing a heartfelt gift card message. Write a warm, personal message (1-2 sentences) for this gift.
 
 Gift Context:
 - Recipient: Your {relation}
@@ -693,25 +809,39 @@ Gift Context:
 
 Write a genuine, emotional message that the giver would write on a gift card. Be loving and heartfelt, not generic."""
 
-                if LLM_PROVIDER == "gemini":
-                    response = llm_client.generate_content(message_prompt)
-                    gift_message = response.text.strip()
-                elif LLM_PROVIDER == "groq":
-                    response = llm_client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        messages=[{"role": "user", "content": message_prompt}],
-                        temperature=0.9,
-                        max_tokens=80
-                    )
-                    gift_message = response.choices[0].message.content.strip()
-                    
+        # CASCADING FALLBACK: Groq → Gemini → Template
+        # Try Groq first
+        if GROQ_AVAILABLE and GROQ_API_KEY:
+            try:
+                groq_client = Groq(api_key=GROQ_API_KEY)
+                response = groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": message_prompt}],
+                    temperature=0.9,
+                    max_tokens=80
+                )
+                gift_message = response.choices[0].message.content.strip()
+                if not is_valid_response(gift_message):
+                    logger.warning("Groq gift message invalid, trying Gemini")
+                    gift_message = None
             except Exception as e:
-                logger.warning(f"Gift LLM failed: {e}")
-                gift_reason = f"This {product['subcategory']} is perfect for your {relation} — matches their style and the {occasion} occasion."
-                gift_message = f"Happy {occasion.title()}! Hope you love this {product['brand']} gift!"
-        else:
-            gift_reason = f"A wonderful {occasion} gift for your {relation}."
-            gift_message = f"Happy {occasion.title()}! Enjoy this special gift."
+                logger.warning(f"Groq gift message failed: {e}, trying Gemini")
+        
+        # Fallback to Gemini if Groq failed
+        if not gift_message and GEMINI_AVAILABLE and GEMINI_API_KEY:
+            try:
+                genai.configure(api_key=GEMINI_API_KEY)
+                gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                response = gemini_model.generate_content(message_prompt)
+                gift_message = response.text.strip()
+                if not is_valid_response(gift_message):
+                    gift_message = None
+            except Exception as e:
+                logger.warning(f"Gemini gift message failed: {e}")
+        
+        # Final fallback to template
+        if not gift_message:
+            gift_message = f"Happy {occasion.title()}! Hope you love this {product['brand']} gift!"
         
         # Suitability tag
         suitability = {'birthday': 'Birthday', 'anniversary': 'Anniversary', 'festive': 'Festive'}.get(occasion, 'General Gift')
@@ -825,10 +955,10 @@ async def _mode_trendseer(request: RecommendationRequest, customer_profile: Dict
         if not get_inventory_availability(product['sku']):
             continue
         
-        # Generate UNIQUE predictive reason via LLM
-        if llm_client:
-            try:
-                prompt = f"""You are a proactive personal stylist. Create a predictive recommendation (1-2 sentences).
+        # Generate UNIQUE predictive reason via LLM with cascading fallback
+        predictive_reason = None
+        
+        prompt = f"""You are a proactive personal stylist. Create a predictive recommendation (1-2 sentences).
 
 Customer Style Profile:
 - Favorite Brands: {', '.join(fav_brands[:2])}
@@ -843,22 +973,39 @@ Trending Product:
 
 Explain why they'll likely need this next based on their style. Be specific and predictive."""
 
-                if LLM_PROVIDER == "gemini":
-                    response = llm_client.generate_content(prompt)
-                    predictive_reason = response.text.strip()
-                elif LLM_PROVIDER == "groq":
-                    response = llm_client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.9,
-                        max_tokens=120
-                    )
-                    predictive_reason = response.choices[0].message.content.strip()
+        # CASCADING FALLBACK: Groq → Gemini → Template
+        # Try Groq first
+        if GROQ_AVAILABLE and GROQ_API_KEY:
+            try:
+                groq_client = Groq(api_key=GROQ_API_KEY)
+                response = groq_client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.9,
+                    max_tokens=120
+                )
+                predictive_reason = response.choices[0].message.content.strip()
+                if not is_valid_response(predictive_reason):
+                    logger.warning("Groq trendseer invalid, trying Gemini")
+                    predictive_reason = None
             except Exception as e:
-                logger.warning(f"Trendseer LLM failed: {e}")
-                predictive_reason = f"Trending now and matches your {fav_brands[0] if fav_brands else 'favorite'} style."
-        else:
-            predictive_reason = f"Trending this month, matches your preferences."
+                logger.warning(f"Groq trendseer failed: {e}, trying Gemini")
+        
+        # Fallback to Gemini if Groq failed
+        if not predictive_reason and GEMINI_AVAILABLE and GEMINI_API_KEY:
+            try:
+                genai.configure(api_key=GEMINI_API_KEY)
+                gemini_model = genai.GenerativeModel('gemini-1.5-flash-latest')
+                response = gemini_model.generate_content(prompt)
+                predictive_reason = response.text.strip()
+                if not is_valid_response(predictive_reason):
+                    predictive_reason = None
+            except Exception as e:
+                logger.warning(f"Gemini trendseer failed: {e}")
+        
+        # Final fallback to template
+        if not predictive_reason:
+            predictive_reason = f"Trending now and matches your {fav_brands[0] if fav_brands else 'favorite'} style."
         
         recommendations.append({
             'sku': product['sku'],
@@ -973,7 +1120,7 @@ if __name__ == "__main__":
     uvicorn.run(
         "app:app",
         host="0.0.0.0",
-        port=8007,
+        port=8004,
         reload=True,
         log_level="info"
 )
