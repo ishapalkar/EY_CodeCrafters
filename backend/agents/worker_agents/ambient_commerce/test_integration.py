@@ -13,7 +13,7 @@ BASE_URL = "http://localhost:8007"
 # Test image paths (relative to data directory)
 TEST_IMAGES = [
     "../../../data/test_images/test_1.jpg",  
-    "../../../data/test_images/test_2.jpg",  
+    "../../../data/test_images/test_2.jpg"
     "../../../data/test_images/test_3.jpg",   
 ]
 
