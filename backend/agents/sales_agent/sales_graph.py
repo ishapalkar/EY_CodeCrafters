@@ -23,6 +23,8 @@ from dotenv import load_dotenv
 
 # Import intent detector (absolute import for direct execution)
 from vertex_intent_detector import detect_intent as vertex_detect_intent
+# Agent client (async unified client for workers)
+from agent_client import call_agent
 
 # Load environment
 load_dotenv()
@@ -135,6 +137,193 @@ def resolve_product_to_sku(product_identifier: str) -> Optional[str]:
     
     logger.warning(f"⚠️  Could not resolve '{product_identifier}' to SKU")
     return None
+
+
+# =====================
+# Orchestrator helpers
+# =====================
+async def fallback_recommendations(intent: Dict[str, Any], limit: int = 5) -> List[Dict[str, Any]]:
+    """Return simple CSV-based recommendations as a fallback when workers are unavailable."""
+    try:
+        if 'products_df' not in globals() or products_df is None:
+            return []
+
+        df = products_df.copy()
+
+        # Filter by product_type if provided
+        ptype = intent.get('product_type')
+        if ptype:
+            if ptype == 'footwear':
+                df = df[df.apply(lambda r: 'shoe' in str(r.get('ProductDisplayName','')).lower() or 'footwear' in str(r.get('ProductDisplayName','')).lower(), axis=1)]
+            elif ptype == 'apparel':
+                df = df[df.apply(lambda r: any(w in str(r.get('ProductDisplayName','')).lower() for w in ['shirt','tshirt','jacket','top','coat']), axis=1)]
+
+        # Price filter
+        max_price = intent.get('max_price') or intent.get('budget')
+        if max_price:
+            try:
+                maxp = float(max_price)
+                # try common price columns
+                price_col = None
+                for c in ['price','mrp','MRP','Price']:
+                    if c in df.columns:
+                        price_col = c
+                        break
+                if price_col:
+                    df = df[pd.to_numeric(df[price_col], errors='coerce') <= maxp]
+            except Exception:
+                pass
+
+        if df.empty:
+            return []
+
+        # Take top N results (simple deterministic ordering)
+        df = df.head(limit)
+
+        results: List[Dict[str, Any]] = []
+        for _, row in df.iterrows():
+            results.append({
+                'sku': row.get('sku') or row.get('SKU') or row.get('Sku'),
+                'name': row.get('ProductDisplayName') or row.get('name') or '',
+                'price': float(row.get('price') or row.get('MRP') or 0),
+                'personalized_reason': 'Recommended based on your query',
+                'image_url': row.get('image_url','') if 'image_url' in row.index else ''
+            })
+
+        return results
+    except Exception as e:
+        logger.warning(f"Fallback recommendations failed: {e}")
+        return []
+
+
+class SalesOrchestrator:
+    """Lightweight orchestrator facade embedded into `sales_graph`.
+
+    Provides the minimal async methods other modules expect from the original
+    `orchestrator.py` so you can safely remove that file and keep this as
+    the single orchestrator surface.
+    """
+
+    def __init__(self):
+        # Use the CSVs already loaded (products_df / customers_df)
+        self.products = globals().get('products_df', None)
+        self.customers = globals().get('customers_df', None)
+
+    async def get_recommendations(self, user_id: str, intent: Dict[str, Any], context: Dict[str, Any]) -> List[Dict[str, Any]]:
+        # Prefer calling the recommendation worker; fall back to CSV recommendations
+        try:
+            payload = {**intent, **(context or {})}
+            # Try agent client (mock or real)
+            resp = await call_agent('recommendation', payload)
+            # Expect worker to return a list under common keys
+            recs = resp.get('recommended_products') or resp.get('recommendations') or resp.get('results') or []
+            if recs:
+                return recs
+        except Exception:
+            logger.debug('Recommendation worker call failed; using fallback CSV')
+
+        # CSV fallback
+        return await fallback_recommendations(intent, limit=context.get('limit', 5) if context else 5)
+
+    async def verify_inventory(self, items: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Check availability for a list of items using the inventory agent."""
+        results = {'all_available': True, 'items': [], 'low_stock_alerts': []}
+        for item in items:
+            sku = item.get('sku') or resolve_product_to_sku(item.get('product_name',''))
+            qty = int(item.get('quantity', 1))
+            try:
+                inv = await call_agent('inventory', {'sku': sku})
+                available = False
+                if isinstance(inv, dict):
+                    if 'available' in inv:
+                        available = bool(inv.get('available'))
+                    else:
+                        # try numeric stock fields
+                        total = inv.get('total_stock') or inv.get('online_stock') or 0
+                        available = int(total) >= qty
+
+                results['items'].append({'sku': sku, 'requested': qty, 'available': available})
+                if not available:
+                    results['all_available'] = False
+                # low-stock heuristic
+                try:
+                    total_stock = int(inv.get('total_stock', 0) or inv.get('online_stock', 0) or 0)
+                    if total_stock > 0 and total_stock < 5:
+                        results['low_stock_alerts'].append({'sku': sku, 'stock': total_stock})
+                except Exception:
+                    pass
+            except Exception as e:
+                results['items'].append({'sku': sku, 'requested': qty, 'available': False, 'error': str(e)})
+                results['all_available'] = False
+
+        return results
+
+    async def create_inventory_holds(self, items: List[Dict[str, Any]], session_id: str) -> List[Dict[str, Any]]:
+        holds = []
+        for item in items:
+            sku = item.get('sku')
+            qty = int(item.get('quantity', 1))
+            try:
+                # Best-effort: ask inventory agent to create a hold
+                resp = await call_agent('inventory', {'action': 'hold', 'sku': sku, 'quantity': qty, 'session_id': session_id})
+                holds.append({'sku': sku, 'hold': resp})
+            except Exception as e:
+                holds.append({'sku': sku, 'error': str(e)})
+        return holds
+
+    async def process_payment(self, customer_id: str, order_total: float, payment_method: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            resp = await call_agent('payment', {'action': 'process', 'customer_id': customer_id, 'amount': order_total, 'payment_method': payment_method})
+            return resp
+        except Exception as e:
+            return {'status': 'failed', 'error': str(e)}
+
+    async def handle_return_exchange(self, order_id: str, items: List[Dict[str, Any]], reason: str, action: str) -> Dict[str, Any]:
+        try:
+            resp = await call_agent('post_purchase', {'action': action, 'order_id': order_id, 'items': items, 'reason': reason})
+            return resp
+        except Exception as e:
+            return {'status': 'failed', 'error': str(e)}
+
+    async def complete_purchase_flow(self, customer_id: str, items: List[Dict[str, Any]], payment_method: Dict[str, Any], shipping_address: Dict[str, Any]) -> Dict[str, Any]:
+        """Minimal end-to-end flow: verify inventory -> create holds -> process payment -> start fulfillment."""
+        flow = {'status': 'initiated', 'steps': {}, 'order_id': f"ORD-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{customer_id[:8]}"}
+        # 1) verify
+        ver = await self.verify_inventory(items)
+        flow['steps']['verify_inventory'] = ver
+        if not ver.get('all_available'):
+            flow['status'] = 'failed'
+            return flow
+
+        # 2) create holds
+        holds = await self.create_inventory_holds(items, session_id=flow['order_id'])
+        flow['steps']['holds'] = holds
+
+        # 3) process payment
+        total = sum([float(i.get('price', 0)) * int(i.get('quantity', 1)) for i in items])
+        payment_resp = await self.process_payment(customer_id, total, payment_method)
+        flow['steps']['payment'] = payment_resp
+        if payment_resp.get('status') in ('failed', False):
+            flow['status'] = 'payment_failed'
+            return flow
+
+        # 4) start fulfillment
+        try:
+            fulfill = await call_agent('fulfillment', {'action': 'start', 'order_id': flow['order_id'], 'customer_id': customer_id, 'items': items, 'shipping_address': shipping_address})
+            flow['steps']['fulfillment'] = fulfill
+            flow['status'] = 'completed'
+        except Exception as e:
+            flow['steps']['fulfillment'] = {'status': 'failed', 'error': str(e)}
+            flow['status'] = 'fulfillment_failed'
+
+        return flow
+
+    async def close(self):
+        return
+
+
+# Global orchestrator instance (compat shim for removed file)
+orchestrator = SalesOrchestrator()
 
 
 # ============================================================================
