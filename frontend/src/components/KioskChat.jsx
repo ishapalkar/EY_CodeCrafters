@@ -153,7 +153,7 @@ const KioskChat = () => {
             const chatMessages = restoreData.session.data.chat_context.map((msg, idx) => ({
               id: idx + 1,
               text: msg.message,
-              sender: msg.sender === 'user' ? 'user' : 'bot',
+              sender: msg.sender === 'user' ? 'user' : 'agent',
               timestamp: new Date(msg.timestamp).toLocaleTimeString('en-US', { 
                 hour: '2-digit', 
                 minute: '2-digit',
@@ -191,7 +191,7 @@ const KioskChat = () => {
         const chatMessages = data.session.data.chat_context.map((msg, idx) => ({
           id: idx + 1,
           text: msg.message,
-          sender: msg.sender === 'user' ? 'user' : 'bot',
+          sender: msg.sender === 'user' ? 'user' : 'agent',
           timestamp: new Date(msg.timestamp).toLocaleTimeString('en-US', { 
             hour: '2-digit', 
             minute: '2-digit',
@@ -204,7 +204,7 @@ const KioskChat = () => {
         setMessages([{
           id: 1,
           text: "Welcome to Aditya Birla Fashion & Retail! I'm your in-store digital assistant. How may I help you today?",
-          sender: 'bot',
+          sender: 'agent',
           timestamp: new Date().toLocaleTimeString('en-US', { 
             hour: '2-digit', 
             minute: '2-digit',
@@ -369,10 +369,10 @@ const KioskChat = () => {
       // Update session token if returned
       if (data.session_token) setSessionToken(data.session_token);
 
-      const botMessage = {
+      const agentMessage = {
         id: Date.now() + 1,
         text: botText,
-        sender: 'bot',
+        sender: 'agent',
         timestamp: new Date().toLocaleTimeString('en-US', { 
           hour: '2-digit', 
           minute: '2-digit',
@@ -381,15 +381,15 @@ const KioskChat = () => {
         cards: data.cards || []
       };
 
-      setMessages(prev => [...prev, botMessage]);
-      await saveChatMessage('bot', botText, { cards: botMessage.cards });
+      setMessages(prev => [...prev, agentMessage]);
+      await saveChatMessage('agent', botText, { cards: agentMessage.cards });
     } catch (error) {
       setIsTyping(false);
       console.error('Agent call failed:', error);
       const failMsg = {
         id: Date.now() + 2,
         text: 'Sorry, I could not reach the assistant. Please try again later.',
-        sender: 'bot',
+        sender: 'agent',
         timestamp: new Date().toLocaleTimeString('en-US', { 
           hour: '2-digit', 
           minute: '2-digit',
@@ -397,7 +397,7 @@ const KioskChat = () => {
         })
       };
       setMessages(prev => [...prev, failMsg]);
-      await saveChatMessage('bot', failMsg.text);
+      await saveChatMessage('agent', failMsg.text);
     }
   };
 

@@ -922,7 +922,26 @@ async def _mode_trendseer(request: RecommendationRequest, customer_profile: Dict
         fav_colors = [c for c, _ in Counter(fav_colors).most_common(2)]
     
     # Detect trending SKUs
-    recent_orders = orders_df.sort_values('order_date', ascending=False).head(200)
+    # Be defensive: orders.csv may use different timestamp column names; try common variants
+    date_candidates = ['order_date', 'created_at', 'order_ts', 'date', 'timestamp', 'order_timestamp', 'order_date_utc']
+    date_col = None
+    for c in date_candidates:
+        if c in orders_df.columns:
+            date_col = c
+            break
+
+    if date_col is None:
+        # No obvious date column — log available columns and fall back to unsorted recent orders
+        logger.warning("Orders DataFrame missing expected date column; available columns: %s", orders_df.columns.tolist())
+        recent_orders = orders_df.head(200)
+    else:
+        # Coerce to datetime where possible and sort
+        try:
+            orders_df[date_col] = pd.to_datetime(orders_df[date_col], errors='coerce')
+            recent_orders = orders_df.dropna(subset=[date_col]).sort_values(date_col, ascending=False).head(200)
+        except Exception:
+            logger.exception("Failed to parse date column '%s' in orders_df; falling back to unsorted head()", date_col)
+            recent_orders = orders_df.head(200)
     trending_skus = recent_orders['product_sku'].value_counts().head(50).index.tolist()
     trending = products_df[products_df['sku'].isin(trending_skus)]
     
