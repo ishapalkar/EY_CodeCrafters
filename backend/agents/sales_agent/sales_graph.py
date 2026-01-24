@@ -537,7 +537,11 @@ async def call_recommendation_worker(state: SalesAgentState) -> SalesAgentState:
                     "name": item.get("name"),
                     "price": item.get("price"),
                     "image": item.get("image_url", ""),
-                    "description": item.get("personalized_reason", "")  # Use personalized_reason
+                        "description": item.get("personalized_reason", ""),  # Use personalized_reason
+                        "personalized_reason": item.get("personalized_reason", ""),
+                        # Include gifting-specific fields when provided by recommendation worker
+                        "gift_message": item.get("gift_message") if isinstance(item, dict) else None,
+                        "gift_suitability": item.get("gift_suitability") if isinstance(item, dict) else None
                 }
                 for item in recommendations
             ]

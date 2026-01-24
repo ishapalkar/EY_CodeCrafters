@@ -790,7 +790,7 @@ Product:
 - {product['brand']} {product['subcategory']}
 - ₹{product['price']}, {product['ratings']}⭐
 
-Explain why this specific product is a fitting choice for this person and occasion. Focus on appropriateness, not emotion."""
+Explain why this specific product is a fitting choice for this person and occasion. Focus on appropriateness, not emotion. Instruction: ONLY describe why this product is suitable — do NOT say it is "not suitable", do NOT compare negatively to other items, and do NOT recommend against the product. Use positive, specific reasons (utility, style match, quality, occasion fit) and keep the language warm, concise, and affirming."""
 
         # CASCADING FALLBACK: Groq → Gemini → Template
         # Try Groq first

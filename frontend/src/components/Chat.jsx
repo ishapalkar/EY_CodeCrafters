@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Check, CheckCheck, Phone, Video, MoreVertical, Mic, MicOff, User, X, CreditCard } from 'lucide-react';
 import { createRazorpayOrder, verifyRazorpayPayment } from '../services/paymentService';
+import API_ENDPOINTS from '../config/api';
+import sessionStore from '../lib/session';
 
-const SESSION_API = 'http://localhost:8000';
-const SALES_API = 'http://localhost:8010';
+const SESSION_API = API_ENDPOINTS.SESSION_MANAGER;
+const SALES_API = API_ENDPOINTS.SALES_AGENT;
 
 const Chat = () => {
   // Session state
@@ -26,10 +28,51 @@ const Chat = () => {
   const transcriptRef = useRef('');
   const paymentInFlightRef = useRef(false);
 
+  // Helper to normalize surrounding quotes from messages so we only add one pair
+  const normalizeQuotes = (text) => {
+    if (!text) return '';
+    return String(text).replace(/^\s*["'“”]+|["'“”]+\s*$/g, '').trim();
+  };
+
   // Session Management Functions
   const startOrRestoreSession = async (phone) => {
     setIsLoadingSession(true);
     try {
+      // Attempt to restore using a stored token first
+      const storedToken = sessionStore.getSessionToken();
+      if (storedToken) {
+        try {
+          const restoreResp = await fetch(`${SESSION_API}/session/restore`, {
+            method: 'GET',
+            headers: { 'X-Session-Token': storedToken }
+          });
+
+          if (restoreResp.ok) {
+            const restoreData = await restoreResp.json();
+            setSessionToken(storedToken);
+            setSessionInfo(restoreData.session);
+            setShowPhoneInput(false);
+            sessionStore.setPhone(phone || sessionStore.getPhone());
+
+            if (restoreData.session.data?.chat_context?.length > 0) {
+                      const chatMessages = restoreData.session.data.chat_context.map((msg, idx) => ({
+                        id: idx + 1,
+                        text: msg.message,
+                        sender: msg.sender === 'user' ? 'user' : 'agent',
+                        timestamp: new Date(msg.timestamp).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                        status: 'read',
+                        cards: msg.metadata?.cards || []
+                      }));
+              setMessages(chatMessages);
+            }
+            setIsLoadingSession(false);
+            return;
+          }
+        } catch (err) {
+          console.warn('Stored session restore failed, falling back to start', err);
+        }
+      }
+
       const response = await fetch(`${SESSION_API}/session/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -43,6 +86,8 @@ const Chat = () => {
 
       const data = await response.json();
       setSessionToken(data.session_token);
+      sessionStore.setSessionToken(data.session_token);
+      sessionStore.setPhone(phone);
       setSessionInfo(data.session);
       setShowPhoneInput(false);
 
@@ -86,6 +131,7 @@ const Chat = () => {
       // Reset UI
       setSessionInfo(null);
       setSessionToken(null);
+      sessionStore.clearAll();
       setMessages([]);
       setShowPhoneInput(true);
       setPhoneNumber('');
@@ -94,10 +140,13 @@ const Chat = () => {
     }
   };
 
-  const saveChatMessage = async (sender, message) => {
+  const saveChatMessage = async (sender, message, metadata = null) => {
     if (!sessionToken) return;
 
     try {
+      const payload = { sender, message };
+      if (metadata) payload.metadata = metadata;
+
       await fetch(`${SESSION_API}/session/update`, {
         method: 'POST',
         headers: {
@@ -106,7 +155,7 @@ const Chat = () => {
         },
         body: JSON.stringify({
           action: 'chat_message',
-          payload: { sender, message }
+          payload
         })
       });
     } catch (error) {
@@ -420,7 +469,7 @@ const Chat = () => {
       };
 
       setMessages(prev => [...prev, agentMessage]);
-      await saveChatMessage('agent', agentText);
+      await saveChatMessage('agent', agentText, { cards: agentMessage.cards || [] });
     } catch (error) {
       setIsTyping(false);
       console.error('Agent call failed:', error);
@@ -647,18 +696,75 @@ const Chat = () => {
                           {card.price && (
                             <p className="text-sm font-bold text-green-600 mt-1">₹{card.price}</p>
                           )}
-                          {card.description && (
+                          {/* Show personalized reason AND gift message (if present). Fall back to description only if neither exists. */}
+                          {(card.personalized_reason || card.gift_message || card.description) && (
                             <div className="mt-2 text-xs text-gray-500">
-                              {card.description.length > 240 && !expandedCards.has(`${message.id}-${idx}`)
-                                ? `${card.description.slice(0, 220)}... `
-                                : card.description}
-                              {card.description.length > 240 && (
-                                <button
-                                  onClick={() => toggleExpandCard(`${message.id}-${idx}`)}
-                                  className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
-                                >
-                                  {expandedCards.has(`${message.id}-${idx}`) ? 'Show less' : 'Show more'}
-                                </button>
+                              {/* Personalized reason (primary) */}
+                              {card.personalized_reason && (
+                                <div className="mb-2">
+                                  {card.personalized_reason.length > 240 && !expandedCards.has(`${message.id}-${idx}-pr`)
+                                    ? `${card.personalized_reason.slice(0, 220)}... `
+                                    : card.personalized_reason}
+                                  {card.personalized_reason.length > 240 && (
+                                    <button
+                                      onClick={() => toggleExpandCard(`${message.id}-${idx}-pr`)}
+                                      className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
+                                    >
+                                      {expandedCards.has(`${message.id}-${idx}-pr`) ? 'Show less' : 'Show more'}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+
+                              {/* Gift message heading + message (italic, green, same size as description) */}
+                              {card.gift_message && (
+                                <div className="mb-2">
+                                  <div className="text-xs font-medium text-[#075e54] mb-1">Gift message to attach:</div>
+                                  <div className="italic text-xs text-[#0b6655]">
+                                    {(() => {
+                                      const gm = normalizeQuotes(card.gift_message);
+                                      if (!gm) return null;
+                                      const short = gm.length > 240 && !expandedCards.has(`${message.id}-${idx}-gift`);
+                                      return (
+                                        <>
+                                          {short ? `"${gm.slice(0,220)}..." ` : `"${gm}"`}
+                                          {gm.length > 240 && (
+                                            <button
+                                              onClick={() => toggleExpandCard(`${message.id}-${idx}-gift`)}
+                                              className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
+                                            >
+                                              {expandedCards.has(`${message.id}-${idx}-gift`) ? 'Show less' : 'Show more'}
+                                            </button>
+                                          )}
+                                        </>
+                                      );
+                                    })()}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* If neither personalized nor gift message exist, show description with expand */}
+                              {(!card.personalized_reason && !card.gift_message && card.description) && (
+                                <>
+                                  {card.description.length > 240 && !expandedCards.has(`${message.id}-${idx}`)
+                                    ? `${card.description.slice(0, 220)}... `
+                                    : card.description}
+                                  {card.description.length > 240 && (
+                                    <button
+                                      onClick={() => toggleExpandCard(`${message.id}-${idx}`)}
+                                      className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
+                                    >
+                                      {expandedCards.has(`${message.id}-${idx}`) ? 'Show less' : 'Show more'}
+                                    </button>
+                                  )}
+                                </>
+                              )}
+
+                              {/* Gift suitability tag */}
+                              {card.gift_suitability && (
+                                <div className="mt-1 inline-block bg-yellow-50 text-yellow-800 px-2 py-0.5 rounded-full text-[11px] font-medium">
+                                  🎁 {card.gift_suitability}
+                                </div>
                               )}
                             </div>
                           )}

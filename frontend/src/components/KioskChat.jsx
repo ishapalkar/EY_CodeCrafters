@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Mic, MicOff, Package, MapPin, User, ShoppingBag, X } from 'lucide-react';
+import API_ENDPOINTS from '../config/api';
+import sessionStore from '../lib/session';
 
-const SESSION_API = 'http://localhost:8000';
-const SALES_API = 'http://localhost:8010';
+const SESSION_API = API_ENDPOINTS.SESSION_MANAGER;
+const SALES_API = API_ENDPOINTS.SALES_AGENT;
 
 const KioskChat = () => {
   // Session state
@@ -19,11 +21,153 @@ const KioskChat = () => {
   const messagesEndRef = useRef(null);
   const recognitionRef = useRef(null);
   const transcriptRef = useRef('');
+  const [expandedMessages, setExpandedMessages] = useState(new Set());
+  const [expandedCards, setExpandedCards] = useState(new Set());
+
+  const toggleExpandMessage = (id) => {
+    setExpandedMessages(prev => {
+      const s = new Set(prev);
+      if (s.has(id)) s.delete(id); else s.add(id);
+      return s;
+    });
+  };
+
+  const toggleExpandCard = (id) => {
+    setExpandedCards(prev => {
+      const s = new Set(prev);
+      if (s.has(id)) s.delete(id); else s.add(id);
+      return s;
+    });
+  };
+
+  // Featured product visibility
+  const [showFeatured, setShowFeatured] = useState(true);
+
+  const findFeaturedCard = () => {
+    // Prefer latest message cards from in-memory messages
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m?.cards && m.cards.length > 0) return m.cards[0];
+    }
+
+    // Fallback: check sessionInfo.chat_context metadata
+    const ctx = sessionInfo?.data?.chat_context || [];
+    for (let i = ctx.length - 1; i >= 0; i--) {
+      const m = ctx[i];
+      if (m?.metadata?.cards && m.metadata.cards.length > 0) return m.metadata.cards[0];
+    }
+
+    return null;
+  };
+
+  const FeaturedProductBlock = ({ messages: _msgs, sessionInfo: _session }) => {
+    const card = findFeaturedCard();
+    if (!card || !showFeatured) return null;
+
+    return (
+      <div className="mb-6 px-4">
+        <div className="relative bg-gradient-to-br from-white to-gray-50 rounded-2xl shadow-lg border border-gray-200 p-4 max-w-md">
+          <button onClick={() => setShowFeatured(false)} className="absolute top-3 right-3 p-1 rounded hover:bg-gray-100">
+            <X className="w-4 h-4 text-gray-500" />
+          </button>
+          <p className="text-sm font-semibold text-gray-600 mb-3">FEATURED PRODUCT</p>
+          <div className="flex gap-4 items-center">
+            {card.image ? (
+              <img src={card.image} alt={card.name} className="w-28 h-28 object-cover rounded-lg" onError={(e)=>e.target.style.display='none'} />
+            ) : (
+              <div className="w-28 h-28 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex items-center justify-center">
+                <ShoppingBag className="w-10 h-10 text-gray-400" />
+              </div>
+            )}
+
+            <div className="flex-1">
+              <h3 className="font-bold text-lg text-gray-800 mb-1">{card.name}</h3>
+              {card.sku && <p className="text-sm text-gray-600 mb-1">{card.sku}</p>}
+              {card.price && <p className="text-2xl font-bold bg-gradient-to-r from-[#8B1538] to-[#D4AF37] bg-clip-text text-transparent mb-3">₹{card.price}</p>}
+              <div className="text-xs text-gray-600">
+                {card.personalized_reason ? (
+                  <>
+                    {card.personalized_reason.length > 120 && !expandedCards.has('featured')
+                      ? `${card.personalized_reason.slice(0,110)}... `
+                      : card.personalized_reason}
+                    {card.personalized_reason.length > 120 && (
+                      <button
+                        onClick={() => toggleExpandCard('featured')}
+                        className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
+                      >
+                        {expandedCards.has('featured') ? 'Show less' : 'Show more'}
+                      </button>
+                    )}
+                  </>
+                ) : card.description ? (
+                  <>
+                    {card.description.length > 120 && !expandedCards.has('featured')
+                      ? `${card.description.slice(0,110)}... `
+                      : card.description}
+                    {card.description.length > 120 && (
+                      <button
+                        onClick={() => toggleExpandCard('featured')}
+                        className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
+                      >
+                        {expandedCards.has('featured') ? 'Show less' : 'Show more'}
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <span className="text-gray-400">Top trending for you</span>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // Helper to normalize surrounding quotes from messages so we only add one pair
+  const normalizeQuotes = (text) => {
+    if (!text) return '';
+    return String(text).replace(/^["'“”\s]+|["'“”\s]+$/g, '').trim();
+  };
 
   // Session Management Functions
   const startOrRestoreSession = async (phone) => {
     setIsLoadingSession(true);
     try {
+      // Attempt to reuse stored token first
+      const storedToken = sessionStore.getSessionToken();
+      if (storedToken) {
+        const restoreResp = await fetch(`${SESSION_API}/session/restore`, {
+          method: 'GET',
+          headers: { 'X-Session-Token': storedToken }
+        });
+
+        if (restoreResp.ok) {
+          const restoreData = await restoreResp.json();
+          setSessionToken(storedToken);
+          setSessionInfo(restoreData.session);
+          setShowPhoneInput(false);
+          sessionStore.setPhone(phone || sessionStore.getPhone());
+          // load history if present
+          if (restoreData.session.data?.chat_context?.length) {
+            const chatMessages = restoreData.session.data.chat_context.map((msg, idx) => ({
+              id: idx + 1,
+              text: msg.message,
+              sender: msg.sender === 'user' ? 'user' : 'bot',
+              timestamp: new Date(msg.timestamp).toLocaleTimeString('en-US', { 
+                hour: '2-digit', 
+                minute: '2-digit',
+                hour12: true 
+              }),
+              cards: msg.metadata?.cards || []
+            }));
+            setMessages(chatMessages);
+          }
+          setIsLoadingSession(false);
+          return;
+        }
+      }
+
       const response = await fetch(`${SESSION_API}/session/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -37,6 +181,8 @@ const KioskChat = () => {
 
       const data = await response.json();
       setSessionToken(data.session_token);
+      sessionStore.setSessionToken(data.session_token);
+      sessionStore.setPhone(phone);
       setSessionInfo(data.session);
       setShowPhoneInput(false);
 
@@ -86,6 +232,7 @@ const KioskChat = () => {
       // Reset UI
       setSessionInfo(null);
       setSessionToken(null);
+      sessionStore.clearAll();
       setMessages([]);
       setShowPhoneInput(true);
       setPhoneNumber('');
@@ -94,10 +241,13 @@ const KioskChat = () => {
     }
   };
 
-  const saveChatMessage = async (sender, message) => {
+  const saveChatMessage = async (sender, message, metadata = null) => {
     if (!sessionToken) return;
 
     try {
+      const payload = { sender, message };
+      if (metadata) payload.metadata = metadata;
+
       await fetch(`${SESSION_API}/session/update`, {
         method: 'POST',
         headers: {
@@ -106,7 +256,7 @@ const KioskChat = () => {
         },
         body: JSON.stringify({
           action: 'chat_message',
-          payload: { sender, message }
+          payload
         })
       });
     } catch (error) {
@@ -227,11 +377,12 @@ const KioskChat = () => {
           hour: '2-digit', 
           minute: '2-digit',
           hour12: true 
-        })
+        }),
+        cards: data.cards || []
       };
 
       setMessages(prev => [...prev, botMessage]);
-      await saveChatMessage('bot', botText);
+      await saveChatMessage('bot', botText, { cards: botMessage.cards });
     } catch (error) {
       setIsTyping(false);
       console.error('Agent call failed:', error);
@@ -420,6 +571,95 @@ const KioskChat = () => {
                 }`}
               >
                 <p className="text-base leading-relaxed mb-2">{message.text}</p>
+
+                {/* Product cards (if any) */}
+                {message.cards && message.cards.length > 0 && (
+                  <div className="mt-3 space-y-3">
+                    {message.cards.map((card, idx) => (
+                      <div key={idx} className="border border-gray-200 rounded-lg p-3 bg-gray-50">
+                        <div className="flex gap-3">
+                          {card.image && (
+                            <img src={card.image} alt={card.name} className="w-20 h-20 object-cover rounded" onError={(e)=>e.target.style.display='none'} />
+                          )}
+                          <div className="flex-1">
+                            <h4 className="font-semibold text-sm text-gray-900">{card.name}</h4>
+                            <p className="text-xs text-gray-600 mt-1">{card.sku}</p>
+                            {card.price && (<p className="text-sm font-bold text-green-600 mt-1">₹{card.price}</p>)}
+
+                            {(card.personalized_reason || card.gift_message || card.description) && (
+                              <div className="mt-2 text-xs text-gray-500">
+                                {card.personalized_reason && (
+                                  <div className="mb-2">
+                                    {card.personalized_reason.length > 240 && !expandedCards.has(`${message.id}-${idx}-pr`)
+                                      ? `${card.personalized_reason.slice(0,220)}... `
+                                      : card.personalized_reason}
+                                    {card.personalized_reason.length > 240 && (
+                                      <button
+                                        onClick={() => toggleExpandCard(`${message.id}-${idx}-pr`)}
+                                        className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
+                                      >
+                                        {expandedCards.has(`${message.id}-${idx}-pr`) ? 'Show less' : 'Show more'}
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+
+                                {card.gift_message && (
+                                  <div className="mb-2">
+                                    <div className="text-xs font-medium text-[#075e54] mb-1">Gift message to attach:</div>
+                                    <div className="italic text-xs text-[#0b6655]">
+                                      {(() => {
+                                        const gm = normalizeQuotes(card.gift_message);
+                                        if (!gm) return null;
+                                        const short = gm.length > 240 && !expandedCards.has(`${message.id}-${idx}-gift`);
+                                        return (
+                                          <>
+                                            {short ? `"${gm.slice(0,220)}..." ` : `"${gm}"`}
+                                            {gm.length > 240 && (
+                                              <button
+                                                onClick={() => toggleExpandCard(`${message.id}-${idx}-gift`)}
+                                                className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
+                                              >
+                                                {expandedCards.has(`${message.id}-${idx}-gift`) ? 'Show less' : 'Show more'}
+                                              </button>
+                                            )}
+                                          </>
+                                        );
+                                      })()}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {(!card.personalized_reason && !card.gift_message && card.description) && (
+                                  <>
+                                    {card.description.length > 240 && !expandedCards.has(`${message.id}-${idx}`)
+                                      ? `${card.description.slice(0,220)}... `
+                                      : card.description}
+                                    {card.description.length > 240 && (
+                                      <button
+                                        onClick={() => toggleExpandCard(`${message.id}-${idx}`)}
+                                        className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
+                                      >
+                                        {expandedCards.has(`${message.id}-${idx}`) ? 'Show less' : 'Show more'}
+                                      </button>
+                                    )}
+                                  </>
+                                )}
+
+                                {card.gift_suitability && (
+                                  <div className="mt-1 inline-block bg-yellow-50 text-yellow-800 px-2 py-0.5 rounded-full text-[11px] font-medium">
+                                    🎁 {card.gift_suitability}
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div className={`text-xs ${
                   message.sender === 'user' ? 'text-gray-200' : 'text-gray-400'
                 }`}>
@@ -445,27 +685,10 @@ const KioskChat = () => {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Product Card Preview (Demo) */}
-        <div className="mb-6 px-4">
-          <div className="bg-gradient-to-br from-white to-gray-50 rounded-2xl shadow-lg border border-gray-200 p-6 max-w-md">
-            <p className="text-sm font-semibold text-gray-600 mb-4">FEATURED PRODUCT</p>
-            <div className="flex gap-4">
-              <div className="w-32 h-32 bg-gradient-to-br from-gray-100 to-gray-200 rounded-xl flex items-center justify-center">
-                <ShoppingBag className="w-12 h-12 text-gray-400" />
-              </div>
-              <div className="flex-1">
-                <h3 className="font-bold text-lg text-gray-800 mb-1">Premium Casual Shoes</h3>
-                <p className="text-sm text-gray-600 mb-2">Van Heusen Collection</p>
-                <p className="text-2xl font-bold bg-gradient-to-r from-[#8B1538] to-[#D4AF37] bg-clip-text text-transparent mb-3">
-                  ₹4,999
-                </p>
-                <button className="w-full bg-gradient-to-r from-[#8B1538] via-[#D2691E] to-[#D4AF37] hover:from-[#7A1230] hover:via-[#C25A15] hover:to-[#C4A037] text-white font-semibold py-2 px-4 rounded-lg hover:shadow-lg transition-all duration-300 transform hover:scale-105">
-                  View Details
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+        {/* Featured Product: show customer's top trending product when available */}
+        {typeof window !== 'undefined' && (
+          <FeaturedProductBlock messages={messages} sessionInfo={sessionInfo} />
+        )}
 
         {/* Quick Action Buttons */}
         <div className="mb-4 px-4">
@@ -476,7 +699,7 @@ const KioskChat = () => {
               className="bg-gradient-to-br from-[#8B1538] via-[#D2691E] to-[#D4AF37] hover:from-[#7A1230] hover:via-[#C25A15] hover:to-[#C4A037] text-white font-semibold py-4 px-6 rounded-xl shadow-md hover:shadow-xl transition-all duration-300 transform hover:scale-105 flex items-center justify-center gap-2"
             >
               <ShoppingBag className="w-5 h-5" />
-              <span>Browse Products</span>
+              <span>Top Picks</span>
             </button>
             <button
               onClick={() => handleQuickAction('track')}
