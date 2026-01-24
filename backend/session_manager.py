@@ -343,10 +343,20 @@ def update_session_state(token: str, action: str, payload: Dict[str, Any]) -> Di
         sender = payload.get("sender", "user")
         # Allow optional metadata to be stored alongside chat messages
         metadata = payload.get("metadata")
-        chat_entry = {"sender": sender, "message": message, "timestamp": _now_iso()}
-        if metadata is not None:
-            chat_entry["metadata"] = metadata
-        data["chat_context"].append(chat_entry)
+
+        # Prevent accidental duplicate consecutive messages (same sender + text)
+        last_entry = data["chat_context"][-1] if data["chat_context"] else None
+        if last_entry and last_entry.get("sender") == sender and last_entry.get("message") == message:
+            # Update timestamp on the existing entry instead of appending duplicate
+            last_entry["timestamp"] = _now_iso()
+            if metadata is not None:
+                last_entry["metadata"] = metadata
+            logger.debug("Skipped appending duplicate chat message; refreshed timestamp instead.")
+        else:
+            chat_entry = {"sender": sender, "message": message, "timestamp": _now_iso()}
+            if metadata is not None:
+                chat_entry["metadata"] = metadata
+            data["chat_context"].append(chat_entry)
 
         data["last_action"] = {"type": "chat_message", "sender": sender, "timestamp": _now_iso()}
 
@@ -378,6 +388,23 @@ def update_session_state(token: str, action: str, payload: Dict[str, Any]) -> Di
     # Return the updated session
     return session
 
+
+def _dedupe_chat_context(session: Dict[str, Any]) -> None:
+    """Remove consecutive duplicate chat entries (in-place) to keep history clean."""
+    ctx = session.get("data", {}).get("chat_context")
+    if not ctx or len(ctx) < 2:
+        return
+
+    cleaned = [ctx[0]]
+    for entry in ctx[1:]:
+        last = cleaned[-1]
+        if entry.get("sender") == last.get("sender") and entry.get("message") == last.get("message"):
+            # skip duplicate
+            continue
+        cleaned.append(entry)
+
+    session["data"]["chat_context"] = cleaned
+
 # -----------------------------
 # API Endpoints
 # -----------------------------
@@ -400,6 +427,12 @@ async def session_start(request: StartSessionRequest):
     )
 
     # Explicitly return a JSONResponse to ensure consistent JSON outputs
+    # Clean up any accidental duplicate entries in chat history before returning
+    try:
+        _dedupe_chat_context(session)
+    except Exception:
+        logger.debug("Failed to dedupe chat context on session start", exc_info=True)
+
     return JSONResponse(status_code=200, content={"session_token": token, "session": session})
 
 
@@ -440,6 +473,20 @@ async def session_restore(
 
     # No valid identifier provided
     raise HTTPException(status_code=400, detail="Missing X-Session-Token, X-Telegram-Chat-Id, or X-Customer-Id header")
+    # Ensure a token was provided by the client
+    if not x_session_token:
+        raise HTTPException(status_code=400, detail="Missing X-Session-Token header")
+
+    # Retrieve the session using our helper (raises 404 if not found)
+    session = get_session(x_session_token)
+    # Clean up any accidental duplicate entries in chat history before returning
+    try:
+        _dedupe_chat_context(session)
+    except Exception:
+        logger.debug("Failed to dedupe chat context on session restore", exc_info=True)
+
+    # Return the session inside a JSON response
+    return JSONResponse(status_code=200, content={"session": session})
 
 
 @app.post("/session/update", response_model=UpdateSessionResponse)
