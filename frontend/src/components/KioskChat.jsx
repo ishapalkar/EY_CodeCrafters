@@ -134,9 +134,10 @@ const KioskChat = () => {
   const startOrRestoreSession = async (phone) => {
     setIsLoadingSession(true);
     try {
-      // Attempt to reuse stored token first
+      // Attempt to reuse stored token first, but only if it belongs to the same phone.
       const storedToken = sessionStore.getSessionToken();
-      if (storedToken) {
+      const storedPhone = sessionStore.getPhone();
+      if (storedToken && storedPhone && phone && storedPhone === phone) {
         const restoreResp = await fetch(`${SESSION_API}/session/restore`, {
           method: 'GET',
           headers: { 'X-Session-Token': storedToken }
@@ -147,7 +148,7 @@ const KioskChat = () => {
           setSessionToken(storedToken);
           setSessionInfo(restoreData.session);
           setShowPhoneInput(false);
-          sessionStore.setPhone(phone || sessionStore.getPhone());
+          sessionStore.setPhone(phone);
           // load history if present
           if (restoreData.session.data?.chat_context?.length) {
             const chatMessages = restoreData.session.data.chat_context.map((msg, idx) => ({
@@ -166,6 +167,10 @@ const KioskChat = () => {
           setIsLoadingSession(false);
           return;
         }
+      }
+
+      if (storedToken && (!storedPhone || storedPhone !== phone)) {
+        sessionStore.clearAll();
       }
 
       const response = await fetch(`${SESSION_API}/session/start`, {
