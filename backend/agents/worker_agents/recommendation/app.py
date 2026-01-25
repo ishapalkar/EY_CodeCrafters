@@ -10,6 +10,7 @@ import pandas as pd
 import json
 import ast
 from pathlib import Path
+import re
 from datetime import datetime
 import logging
 import os
@@ -283,10 +284,36 @@ def get_inventory_availability(sku: str) -> bool:
     
     if inventory.empty:
         return False
-    
-    # Check if any location has stock > 0
-    total_stock = inventory['qty'].sum()
-    return total_stock > 0
+    # Determine the quantity column name (support multiple CSV variants)
+    possible_qty_cols = ['qty', 'quantity', 'available_qty', 'available', 'stock']
+    qty_col = None
+    for col in possible_qty_cols:
+        if col in inventory.columns:
+            qty_col = col
+            break
+
+    # If no known qty column, try to pick the first numeric column as fallback
+    if qty_col is None:
+        numeric_cols = inventory.select_dtypes(include='number').columns.tolist()
+        # prefer 'quantity' like names if present in numeric_cols
+        for c in numeric_cols:
+            if 'quant' in c.lower() or 'qty' in c.lower() or 'stock' in c.lower() or 'available' in c.lower():
+                qty_col = c
+                break
+        if qty_col is None and numeric_cols:
+            qty_col = numeric_cols[0]
+
+    if qty_col is None:
+        # No usable quantity column found; log and assume out of stock to be safe
+        logger.warning(f"No quantity column found in inventory for SKU {sku}; available columns: {inventory.columns.tolist()}")
+        return False
+
+    try:
+        total_stock = inventory[qty_col].astype(float).sum()
+        return total_stock > 0
+    except Exception:
+        logger.exception(f"Failed to compute total stock using column '{qty_col}' for SKU {sku}")
+        return False
 
 
 def filter_products_by_intent(
@@ -301,25 +328,43 @@ def filter_products_by_intent(
     target_gender = intent.get('gender', '').lower() if intent.get('gender') else customer_profile.get('gender', '').lower()
     
     if target_gender in ['male', 'female']:
-        # Use word boundaries to prevent 'men' from matching in 'women'
+        # Prefer explicit gender attribute in the product's attributes JSON when available,
+        # otherwise fall back to name-based heuristics. Use word boundaries to avoid
+        # substring collisions (e.g. 'shoe' vs 'shirt').
+        attrs = filtered['attributes'].astype(str)
+
+        # Name-based masks
+        name_male = filtered['ProductDisplayName'].str.contains(r"\b(?:men|man|boys|boy|men's|boy's)\b", case=False, na=False, regex=True)
+        name_female = filtered['ProductDisplayName'].str.contains(r"\b(?:women|woman|girls|girl|women's|girl's)\b", case=False, na=False, regex=True)
+
+        # Attributes JSON mask (looks for a gender field inside the attributes string)
+        attr_male = attrs.str.contains(r'"gender"\s*:\s*"(?:men|male|boy|boys)"', case=False, na=False, regex=True)
+        attr_female = attrs.str.contains(r'"gender"\s*:\s*"(?:women|female|girl|girls)"', case=False, na=False, regex=True)
+
+        # Combine masks: prefer explicit attribute match, else use name heuristics
+        male_mask = attr_male | name_male
+        female_mask = attr_female | name_female
+
         if target_gender == 'male':
-            # For male: must contain men/man/boys/men's, must NOT contain women/woman/girls/women's
-            filtered = filtered[
-                (filtered['ProductDisplayName'].str.contains(r'\b(?:men|man|boys|men\'s)\b', case=False, na=False, regex=True)) &
-                (~filtered['ProductDisplayName'].str.contains(r'\b(?:women|woman|girls|women\'s)\b', case=False, na=False, regex=True))
-            ]
+            # Include items that strongly indicate male, exclude those strongly indicating female
+            filtered = filtered[male_mask & (~female_mask)]
         else:  # female
-            # For female: must contain women/woman/girls/women's, must NOT contain men/man/boys/men's
-            filtered = filtered[
-                (filtered['ProductDisplayName'].str.contains(r'\b(?:women|woman|girls|women\'s)\b', case=False, na=False, regex=True)) &
-                (~filtered['ProductDisplayName'].str.contains(r'\b(?:men|man|boys|men\'s)\b', case=False, na=False, regex=True))
-            ]
+            filtered = filtered[female_mask & (~male_mask)]
     
     # Filter by category
     category_filter = intent.get('category') or intent.get('subcategory')
     if category_filter:
         # Normalize category filter for better matching
-        category_lower = category_filter.lower()
+        # If the user provided a combined phrase like 'women shoes', remove gender tokens
+        # so we filter by the actual category (e.g., 'shoes'). Also, if the category_filter
+        # is just a gender word, skip category filtering here (gender already handled above).
+        gender_tokens_re = r"\b(?:men|man|boys|boy|men's|boy's|women|woman|girls|girl|women's|girl's|male|female)\b"
+        cleaned = re.sub(gender_tokens_re, '', category_filter, flags=re.IGNORECASE).strip()
+        category_lower = cleaned.lower() if cleaned else category_filter.lower()
+        # If cleaned is empty, it means the user only supplied a gender as category; skip category filtering
+        if cleaned == '':
+            category_filter = None
+            category_lower = None
         if category_lower in ['shirt', 'shirts']:
             # Match various shirt-related terms
             name_patterns = ['shirt', 't-shirt', 'polo', 'topwear']
@@ -335,11 +380,12 @@ def filter_products_by_intent(
             name_matches = filtered['ProductDisplayName'].str.contains('|'.join(name_patterns), case=False, na=False, regex=True)
             filtered = filtered[category_matches | subcategory_matches | name_matches]
         else:
-            # Default filtering
+            # Default filtering using word-boundary regex to avoid accidental partial matches
+            pattern = rf"\b{re.escape(category_filter)}\b"
             filtered = filtered[
-                filtered['category'].str.contains(category_filter, case=False, na=False) |
-                filtered['subcategory'].str.contains(category_filter, case=False, na=False) |
-                filtered['ProductDisplayName'].str.contains(category_filter, case=False, na=False)
+                filtered['category'].str.contains(pattern, case=False, na=False, regex=True) |
+                filtered['subcategory'].str.contains(pattern, case=False, na=False, regex=True) |
+                filtered['ProductDisplayName'].str.contains(pattern, case=False, na=False, regex=True)
             ]
     
     # Filter by price range
@@ -679,25 +725,19 @@ async def _mode_gifting_genius(request: RecommendationRequest, customer_profile:
     
     logger.info(f"   🎁 Gift recipient: {relation} ({recipient_gender})")
     
-    # Filter by recipient gender (NOT buyer gender)
-    filtered = products_df.copy()
-    
-    if recipient_gender in ['male', 'female']:
-        # Define keywords for matching and exclusion with word boundaries
-        if recipient_gender == 'male':
-            # For male: must contain men/man/boys/men's, must NOT contain women/woman/girls/women's
-            filtered = filtered[
-                (filtered['ProductDisplayName'].str.contains(r'\b(?:men|man|boys|men\'s)\b', case=False, na=False, regex=True)) &
-                (~filtered['ProductDisplayName'].str.contains(r'\b(?:women|woman|girls|women\'s)\b', case=False, na=False, regex=True))
-            ]
-        else:  # female
-            # For female: must contain women/woman/girls/women's, must NOT contain men/man/boys/men's
-            filtered = filtered[
-                (filtered['ProductDisplayName'].str.contains(r'\b(?:women|woman|girls|women\'s)\b', case=False, na=False, regex=True)) &
-                (~filtered['ProductDisplayName'].str.contains(r'\b(?:men|man|boys|men\'s)\b', case=False, na=False, regex=True))
-            ]
-        
-        logger.info(f"   Filtered to {len(filtered)} gender-appropriate gift products")
+    # Use the common intent-based filter to apply recipient gender + category filtering
+    # This ensures phrases like 'women shoes' are treated as 'shoes' and that gender
+    # filtering is applied consistently with other modes.
+    local_intent = dict(request.intent or {})
+    if recipient_gender:
+        local_intent['gender'] = recipient_gender
+
+    # Start with intent-based filtering (handles gender + category + budget)
+    try:
+        filtered = filter_products_by_intent(local_intent, customer_profile)
+    except Exception:
+        logger.exception('Intent-based filtering failed in gifting mode; falling back to full product set')
+        filtered = products_df.copy()
     
     # Budget filter (apply BEFORE safe_sizes to maintain gender filtering)
     budget_min = request.intent.get('budget_min', 0)
@@ -970,20 +1010,22 @@ async def _mode_trendseer(request: RecommendationRequest, customer_profile: Dict
     
     # Filter by buyer's gender first (for their own purchases)
     if buyer_gender in ['male', 'female']:
-        # Define keywords with word boundaries to prevent 'men' matching in 'women'
+        attrs = trending['attributes'].astype(str)
+
+        name_male = trending['ProductDisplayName'].str.contains(r"\b(?:men|man|boys|boy|men's|boy's)\b", case=False, na=False, regex=True)
+        name_female = trending['ProductDisplayName'].str.contains(r"\b(?:women|woman|girls|girl|women's|girl's)\b", case=False, na=False, regex=True)
+
+        attr_male = attrs.str.contains(r'"gender"\s*:\s*"(?:men|male|boy|boys)"', case=False, na=False, regex=True)
+        attr_female = attrs.str.contains(r'"gender"\s*:\s*"(?:women|female|girl|girls)"', case=False, na=False, regex=True)
+
+        male_mask = attr_male | name_male
+        female_mask = attr_female | name_female
+
         if buyer_gender == 'male':
-            # For male: must contain men/man/boys/men's, must NOT contain women/woman/girls/women's
-            trending = trending[
-                (trending['ProductDisplayName'].str.contains(r'\b(?:men|man|boys|men\'s)\b', case=False, na=False, regex=True)) &
-                (~trending['ProductDisplayName'].str.contains(r'\b(?:women|woman|girls|women\'s)\b', case=False, na=False, regex=True))
-            ]
-        else:  # female
-            # For female: must contain women/woman/girls/women's, must NOT contain men/man/boys/men's
-            trending = trending[
-                (trending['ProductDisplayName'].str.contains(r'\b(?:women|woman|girls|women\'s)\b', case=False, na=False, regex=True)) &
-                (~trending['ProductDisplayName'].str.contains(r'\b(?:men|man|boys|men\'s)\b', case=False, na=False, regex=True))
-            ]
-        
+            trending = trending[male_mask & (~female_mask)]
+        else:
+            trending = trending[female_mask & (~male_mask)]
+
         logger.info(f"   Filtered to {len(trending)} gender-appropriate trending products")
     
     # Match style
