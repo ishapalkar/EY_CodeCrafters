@@ -107,6 +107,15 @@ export const createRazorpayOrder = async (orderData) => {
 };
 
 /**
+ * Fetch the next canonical order identifier from the backend.
+ * @returns {Promise<string>} Order ID in ORD###### format.
+ */
+export const getNextOrderId = async () => {
+  const response = await apiCall(API_ENDPOINTS.PAYMENT_NEXT_ORDER_ID);
+  return response.order_id;
+};
+
+/**
  * Verify a Razorpay payment after checkout success
  * @param {Object} verificationData - Razorpay verification payload
  * @returns {Promise<Object>} Verification response from backend
@@ -127,5 +136,6 @@ export default {
   authorizePayment,
   capturePayment,
   createRazorpayOrder,
+  getNextOrderId,
   verifyRazorpayPayment,
 };

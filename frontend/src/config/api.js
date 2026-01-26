@@ -45,6 +45,7 @@ export const API_ENDPOINTS = {
   PAYMENT_REFUND: `${API_BASE_URL}:8003/payment/refund`,
   PAYMENT_AUTHORIZE: `${API_BASE_URL}:8003/payment/authorize`,
   PAYMENT_CAPTURE: `${API_BASE_URL}:8003/payment/capture`,
+    PAYMENT_NEXT_ORDER_ID: `${API_BASE_URL}:8003/payment/next-order-id`,
   PAYMENT_RAZORPAY_CREATE: `${API_BASE_URL}:8003/payment/razorpay/create-order`,
   PAYMENT_RAZORPAY_VERIFY: `${API_BASE_URL}:8003/payment/razorpay/verify-payment`,
 

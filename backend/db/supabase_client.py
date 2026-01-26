@@ -1,13 +1,16 @@
 """
-Supabase Data API client for read operations.
+Supabase Data API helper utilities.
 
-Uses the anon key for public read access via PostgREST.
-Loads credentials from backend/.env automatically.
+Supports both read and write operations via PostgREST. Reads default to the
+anon key while writes prefer a service-role key when available. Loads
+credentials from backend/.env automatically.
 """
+import logging
 import os
-import requests
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Union
+
+import requests
 from dotenv import load_dotenv
 
 # Load .env from backend folder (search upward from this file)
@@ -20,19 +23,42 @@ else:
     load_dotenv()  # fallback to default search
     print("[supabase_client] Using default dotenv search")
 
+logger = logging.getLogger(__name__)
+
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip().strip('"')
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "").strip().strip('"')
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip().strip('"')
 FEATURE_SUPABASE_READ = os.getenv("FEATURE_SUPABASE_READ", "false").lower() == "true"
+FEATURE_SUPABASE_WRITE = os.getenv("FEATURE_SUPABASE_WRITE", "false").lower() == "true"
 
-print(f"[supabase_client] URL set: {bool(SUPABASE_URL)}, ANON_KEY present: {bool(SUPABASE_ANON_KEY)}, Feature enabled: {FEATURE_SUPABASE_READ}")
+logger.info(
+    "[supabase_client] URL set: %s, ANON_KEY present: %s, SERVICE_KEY present: %s, "
+    "Read enabled: %s, Write enabled: %s",
+    bool(SUPABASE_URL),
+    bool(SUPABASE_ANON_KEY),
+    bool(SUPABASE_SERVICE_ROLE_KEY),
+    FEATURE_SUPABASE_READ,
+    FEATURE_SUPABASE_WRITE,
+)
 
 
-def _get_headers() -> Dict[str, str]:
-    return {
-        "apikey": SUPABASE_ANON_KEY,
-        "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+def _get_read_key() -> str:
+    return SUPABASE_ANON_KEY
+
+
+def _get_write_key() -> str:
+    return SUPABASE_SERVICE_ROLE_KEY or SUPABASE_ANON_KEY
+
+
+def _get_headers(api_key: str, *, extra: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    headers = {
+        "apikey": api_key,
+        "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
+    if extra:
+        headers.update(extra)
+    return headers
 
 
 def _build_url(table: str) -> str:
@@ -42,7 +68,12 @@ def _build_url(table: str) -> str:
 
 def is_enabled() -> bool:
     """Check if Supabase reads are enabled and configured."""
-    return FEATURE_SUPABASE_READ and bool(SUPABASE_URL) and bool(SUPABASE_ANON_KEY)
+    return FEATURE_SUPABASE_READ and bool(SUPABASE_URL) and bool(_get_read_key())
+
+
+def is_write_enabled() -> bool:
+    """Check if Supabase writes are permitted and configured."""
+    return FEATURE_SUPABASE_WRITE and bool(SUPABASE_URL) and bool(_get_write_key())
 
 
 def select(
@@ -74,7 +105,7 @@ def select(
     full_url = url + qs
     
     try:
-        resp = requests.get(full_url, headers=_get_headers(), timeout=timeout)
+        resp = requests.get(full_url, headers=_get_headers(_get_read_key()), timeout=timeout)
         resp.raise_for_status()
         return resp.json()
     except requests.exceptions.HTTPError as e:
@@ -95,3 +126,55 @@ def select_one(
     """Select a single row (returns first match or None)."""
     rows = select(table, params=params, columns=columns)
     return rows[0] if rows else None
+
+
+def upsert(
+    table: str,
+    rows: Union[Dict[str, Any], Sequence[Dict[str, Any]]],
+    *,
+    conflict_column: Optional[str] = None,
+    timeout: int = 10,
+) -> Optional[List[Dict[str, Any]]]:
+    """Upsert row(s) into a Supabase table."""
+    if not is_write_enabled():
+        logger.debug("[supabase_client] Write skipped; feature disabled")
+        return None
+
+    payload: List[Dict[str, Any]]
+    if isinstance(rows, dict):
+        payload = [rows]
+    else:
+        payload = list(rows)
+
+    if not payload:
+        return None
+
+    params = ""
+    if conflict_column:
+        params = f"?on_conflict={conflict_column}"
+
+    url = _build_url(table) + params
+
+    headers = _get_headers(
+        _get_write_key(),
+        extra={
+            "Prefer": "resolution=merge-duplicates,return=representation",
+        },
+    )
+
+    try:
+        resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+        resp.raise_for_status()
+        if resp.content:
+            return resp.json()
+        return None
+    except requests.exceptions.HTTPError as exc:
+        status = getattr(exc.response, "status_code", "N/A")
+        body = getattr(exc.response, "text", str(exc))[:400]
+        logger.warning(
+            "[supabase_client] Upsert failed for %s (%s): %s", table, status, body
+        )
+        raise
+    except requests.exceptions.RequestException as exc:
+        logger.warning("[supabase_client] Upsert request error for %s: %s", table, exc)
+        raise

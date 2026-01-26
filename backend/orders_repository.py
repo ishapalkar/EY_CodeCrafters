@@ -5,9 +5,12 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import re
 from pathlib import Path
 from threading import Lock
 from typing import Dict, Iterable, Any, List
+
+from db import supabase_client
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +26,9 @@ FIELDNAMES: Iterable[str] = (
 )
 
 _WRITE_LOCK = Lock()
+_SUPABASE_TABLE = "orders"
+_NUMERIC_FIELDS = {"total_amount"}
+_ORDER_ID_PATTERN = re.compile(r"^ORD\d{6}$")
 
 
 def _load_existing_rows() -> Dict[str, Dict[str, str]]:
@@ -35,16 +41,38 @@ def _load_existing_rows() -> Dict[str, Dict[str, str]]:
         return {row["order_id"]: row for row in reader if row.get("order_id")}
 
 
+def is_valid_order_id(order_id: str | None) -> bool:
+    return bool(order_id) and bool(_ORDER_ID_PATTERN.match(order_id))
+
+
+def _generate_next_order_id(rows: Dict[str, Dict[str, str]]) -> str:
+    max_seq = 0
+    for order_id in rows.keys():
+        match = _ORDER_ID_PATTERN.match(order_id)
+        if match:
+            max_seq = max(max_seq, int(order_id[3:]))
+    return f"ORD{max_seq + 1:06d}"
+
+
+def generate_next_order_id() -> str:
+    with _WRITE_LOCK:
+        rows = _load_existing_rows()
+        return _generate_next_order_id(rows)
+
+
 def upsert_order_record(record: Dict[str, Any]) -> None:
     """Insert or update an order entry in orders.csv in a threadsafe way."""
     if "order_id" not in record or not record["order_id"]:
         raise ValueError("record must include a non-empty order_id")
 
     logger.info(f"📝 Upserting order: {record.get('order_id')}")
+
+    csv_payload = dict(record)
+    supabase_payload = dict(record)
     
     # Ensure items is JSON string if it's a dict/list
-    if isinstance(record.get("items"), (dict, list)):
-        record["items"] = json.dumps(record["items"])
+    if isinstance(csv_payload.get("items"), (dict, list)):
+        csv_payload["items"] = json.dumps(csv_payload["items"])
         logger.debug(f"   Serialized items to JSON")
 
     with _WRITE_LOCK:
@@ -52,7 +80,15 @@ def upsert_order_record(record: Dict[str, Any]) -> None:
         rows = _load_existing_rows()
         logger.debug(f"   Loaded {len(rows)} existing rows")
         
-        rows[record["order_id"]] = {field: str(record.get(field, "")) for field in FIELDNAMES}
+        def _csv_value(field: str, value: Any) -> str:
+            if value is None:
+                return ""
+            return str(value)
+
+        rows[csv_payload["order_id"]] = {
+            field: _csv_value(field, csv_payload.get(field, ""))
+            for field in FIELDNAMES
+        }
         logger.debug(f"   Updated row for order_id")
 
         ORDERS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -63,3 +99,53 @@ def upsert_order_record(record: Dict[str, Any]) -> None:
             writer.writeheader()
             writer.writerows(rows.values())
             logger.info(f"✅ Written {len(rows)} orders to {ORDERS_FILE}")
+
+    _sync_to_supabase(supabase_payload)
+
+
+def _prepare_supabase_payload(record: Dict[str, Any]) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {}
+    for field in FIELDNAMES:
+        value = record.get(field)
+        if value in (None, ""):
+            payload[field] = None
+            continue
+
+        if field == "items":
+            if isinstance(value, str):
+                try:
+                    payload[field] = json.loads(value)
+                except json.JSONDecodeError:
+                    payload[field] = value
+            else:
+                payload[field] = value
+        elif field in _NUMERIC_FIELDS:
+            try:
+                payload[field] = float(value)
+            except (TypeError, ValueError):
+                payload[field] = None
+        else:
+            payload[field] = value
+
+    return payload
+
+
+def _sync_to_supabase(record: Dict[str, Any]) -> None:
+    if not supabase_client.is_write_enabled():
+        return
+
+    payload = _prepare_supabase_payload(record)
+
+    try:
+        supabase_client.upsert(
+            _SUPABASE_TABLE,
+            payload,
+            conflict_column="order_id",
+        )
+        logger.info("[orders_repository] Synced order %s to Supabase", record.get("order_id"))
+    except Exception as exc:
+        logger.warning(
+            "[orders_repository] Failed to sync order %s to Supabase: %s",
+            record.get("order_id"),
+            exc,
+        )

@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Check, CheckCheck, Phone, Video, Mic, MicOff, User, X, CreditCard, LifeBuoy } from 'lucide-react';
-import { createRazorpayOrder, verifyRazorpayPayment } from '../services/paymentService';
+import { createRazorpayOrder, verifyRazorpayPayment, getNextOrderId } from '../services/paymentService';
 import { getTierInfo } from '../services/loyaltyService';
 import API_ENDPOINTS from '../config/api';
 import sessionStore from '../lib/session';
@@ -46,6 +46,18 @@ const formatINR = (amount) => {
 const buildCheckoutOrderId = (sku = '') => {
   const safeSku = sku ? String(sku).replace(/[^A-Za-z0-9]/g, '').toUpperCase() : 'ITEM';
   return `ORDER-${safeSku}-${Date.now()}`;
+};
+
+const fetchCanonicalOrderId = async (sku = '') => {
+  try {
+    const reservedId = await getNextOrderId();
+    if (reservedId) {
+      return reservedId;
+    }
+  } catch (error) {
+    console.warn('Falling back to local order id generation:', error);
+  }
+  return buildCheckoutOrderId(sku);
 };
 
 const extractCardAttribute = (card, key) => {
@@ -761,19 +773,27 @@ const Chat = () => {
         },
         handler: async (response) => {
           try {
-            await verifyRazorpayPayment({
+            const verificationResult = await verifyRazorpayPayment({
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_order_id: response.razorpay_order_id,
               razorpay_signature: response.razorpay_signature,
               amount_rupees: parsedAmount,
               user_id: sessionInfo?.data?.customer_id || sessionInfo?.phone,
               method: 'razorpay',
+              order_id: normalizedDetails.orderId,
             });
 
             // Refresh loyalty points after payment
             await fetchLoyaltyPoints(userId);
 
-            let successText = `✅ Payment of ₹${parsedAmount} received!\nPayment ID: ${response.razorpay_payment_id}`;
+            const canonicalOrderId =
+              verificationResult?.order_id || normalizedDetails.orderId || response.razorpay_order_id;
+            const canonicalPaymentId = verificationResult?.payment_id || response.razorpay_payment_id;
+            const gatewayPaymentId =
+              verificationResult?.gateway_payment_id || response.razorpay_payment_id;
+
+            let successText =
+              `✅ Payment of ₹${parsedAmount} received!\nOrder ID: ${canonicalOrderId}\nPayment ID: ${canonicalPaymentId}`;
             
             // Add product-specific message and rewards
             if (productDetails) {
@@ -795,10 +815,10 @@ const Chat = () => {
             const displayName = productDetails?.name || '';
             const productLine = displayName ? ` for ${displayName}` : '';
             await appendAgentMessage(
-              `✅ Payment of ${formatINR(parsedAmount)} received${productLine}!\nPayment ID: ${response.razorpay_payment_id}`
+              `✅ Payment of ${formatINR(parsedAmount)} received${productLine}!\nOrder ID: ${canonicalOrderId}\nPayment ID: ${canonicalPaymentId}`
             );
 
-            const orderId = normalizedDetails.orderId || response.razorpay_order_id;
+            const orderId = canonicalOrderId;
             const recordedAddress = normalizedDetails.address || savedAddress || null;
 
             if (productDetails) {
@@ -813,7 +833,8 @@ const Chat = () => {
                 created_at: new Date().toISOString(),
                 shipping_address: recordedAddress || {},
                 metadata: {
-                  payment_id: response.razorpay_payment_id,
+                  payment_id: canonicalPaymentId,
+                  gateway_payment_id: gatewayPaymentId,
                   razorpay_order_id: response.razorpay_order_id,
                   checkout_source: normalizedDetails.source || '',
                   session_id: sessionInfo?.session_id || '',
@@ -840,7 +861,8 @@ const Chat = () => {
               setLastCompletedOrder({
                 orderId,
                 amount: parsedAmount,
-                paymentId: response.razorpay_payment_id,
+                paymentId: canonicalPaymentId,
+                gatewayPaymentId,
                 product: productDetails || undefined,
                 address: recordedAddress,
               });
@@ -1050,7 +1072,7 @@ const Chat = () => {
       }
 
       const normalizedQuantity = Number(product.quantity) > 0 ? Number(product.quantity) : 1;
-      const orderId = buildCheckoutOrderId(product.sku || 'ITEM');
+      const orderId = await fetchCanonicalOrderId(product.sku || 'ITEM');
       const normalizedProduct = {
         ...product,
         price: safeAmount,

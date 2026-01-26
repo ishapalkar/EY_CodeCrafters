@@ -4,15 +4,16 @@
 from fastapi import APIRouter, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 import uvicorn
 import uuid
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, ROUND_HALF_UP, InvalidOperation
 import json
 import logging
 import os
 import requests
+import csv
 print(">>> Razorpay router loaded")
 try:
     import razorpay
@@ -50,6 +51,50 @@ LOYALTY_SERVICE_URL = os.getenv("LOYALTY_SERVICE_URL", "http://localhost:8002")
 
 razorpay_client = None
 razorpay_router = APIRouter(prefix="/payment/razorpay", tags=["Razorpay"])
+
+
+def _load_customer_mappings() -> tuple[Dict[str, str], Dict[str, str]]:
+    phone_to_id: Dict[str, str] = {}
+    ids: Dict[str, str] = {}
+    try:
+        customers_path = Path(__file__).resolve().parents[3] / "data" / "customers.csv"
+        with customers_path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                cid = str(row.get("customer_id", "")).strip()
+                phone = str(row.get("phone_number", "")).strip()
+                if cid:
+                    ids[cid] = cid
+                if cid and phone:
+                    phone_to_id[phone] = cid
+    except Exception as exc:
+        logger.warning(f"⚠️  Could not load customer mappings: {exc}")
+    return phone_to_id, ids
+
+
+PHONE_TO_CUSTOMER_ID, CUSTOMER_IDS = _load_customer_mappings()
+
+
+def _resolve_customer_id(user_id: Optional[str], metadata: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    candidate: Optional[str] = None
+
+    if metadata:
+        cid = metadata.get("customer_id")
+        if cid and str(cid) in CUSTOMER_IDS:
+            candidate = str(cid)
+        else:
+            phone = metadata.get("phone") or metadata.get("phone_number")
+            if phone and str(phone) in PHONE_TO_CUSTOMER_ID:
+                candidate = PHONE_TO_CUSTOMER_ID[str(phone)]
+
+    if not candidate and user_id:
+        uid = str(user_id)
+        if uid in CUSTOMER_IDS:
+            candidate = uid
+        elif uid in PHONE_TO_CUSTOMER_ID:
+            candidate = PHONE_TO_CUSTOMER_ID[uid]
+
+    return candidate
 
 
 def _ensure_razorpay_client():
@@ -210,6 +255,7 @@ class RazorpayVerifyRequest(BaseModel):
     gst: Optional[float] = Field(None, ge=0, description="GST amount for record keeping")
     idempotency_key: Optional[str] = Field(None, description="Client supplied idempotency key")
     user_id: Optional[str] = Field(None, description="User reference for auditing")
+    order_id: Optional[str] = Field(None, description="Preferred canonical order identifier")
 
 
 # ==========================================
@@ -251,13 +297,27 @@ async def create_razorpay_order(payload: RazorpayCreateOrderRequest):
     if payload.notes:
         order_payload["notes"] = payload.notes
 
+    # Generate or reuse canonical order ID for display and downstream flows
+    if payload.receipt and orders_repository.is_valid_order_id(payload.receipt):
+        app_order_id = payload.receipt
+    else:
+        app_order_id = orders_repository.generate_next_order_id()
+    order_payload["receipt"] = app_order_id
+
     order = client.order.create(order_payload)
 
     return {
         "order": order,
         "razorpay_key_id": RAZORPAY_KEY_ID,
         "amount_rupees": _quantize(amount_rupees),
+        "order_id": app_order_id,
     }
+
+
+@app.get("/payment/next-order-id")
+async def get_next_order_id():
+    """Reserve and return the next canonical order identifier."""
+    return {"order_id": orders_repository.generate_next_order_id()}
 
 
 @razorpay_router.post("/verify-payment")
@@ -285,26 +345,58 @@ async def verify_razorpay_payment(payload: RazorpayVerifyRequest):
     idempotency_key = payload.idempotency_key or f"idemp_{payload.razorpay_payment_id}"
     timestamp = datetime.now().isoformat()
 
-    payment_repository.upsert_payment_record({
-        "payment_id": payload.razorpay_payment_id,
-        "order_id": payload.razorpay_order_id,
-        "status": "success",
-        "amount_rupees": _quantize(amount_rupees),
-        "discount_applied": _quantize(discount_value),
-        "gst": _quantize(gst_value),
-        "method": method,
-        "gateway_ref": payload.razorpay_payment_id,
-        "idempotency_key": idempotency_key,
-        "created_at": timestamp,
-    })
+    customer_id = _resolve_customer_id(payload.user_id, None)
+    preferred_order_id = payload.order_id if payload.order_id and orders_repository.is_valid_order_id(payload.order_id) else None
+    original_order_ref = payload.razorpay_order_id
+    canonical_order_id = preferred_order_id
+    if not canonical_order_id:
+        canonical_order_id = (
+            original_order_ref
+            if orders_repository.is_valid_order_id(original_order_ref)
+            else orders_repository.generate_next_order_id()
+        )
+
+    try:
+        orders_repository.upsert_order_record(
+                {
+                    "order_id": canonical_order_id,
+                    "customer_id": customer_id,
+                "items": json.dumps([]),
+                "total_amount": float(amount_rupees),
+                "status": "paid",
+                "created_at": timestamp,
+            }
+        )
+    except Exception as exc:
+        logger.warning(f"⚠️  Failed to ensure order {canonical_order_id}: {exc}")
+
+    payment_id = payment_repository.generate_next_payment_id()
+    payment_id = payment_repository.upsert_payment_record(
+        {
+            "payment_id": payment_id,
+            "order_id": canonical_order_id,
+            "status": "success",
+            "amount_rupees": _quantize(amount_rupees),
+            "discount_applied": _quantize(discount_value),
+            "gst": _quantize(gst_value),
+            "method": method,
+            "gateway_ref": payload.razorpay_payment_id,
+            "idempotency_key": idempotency_key,
+            "created_at": timestamp,
+        }
+    )
 
     metadata = {
         "idempotency_key": idempotency_key,
         "razorpay_signature": payload.razorpay_signature,
+        "gateway_payment_id": payload.razorpay_payment_id,
+        "original_order_reference": original_order_ref,
     }
+    if customer_id:
+        metadata["customer_id"] = customer_id
 
     transaction_payload = {
-        "transaction_id": payload.razorpay_payment_id,
+        "transaction_id": payment_id,
         "user_id": payload.user_id or "",
         "amount": _quantize(amount_rupees),
         "payment_method": method,
@@ -312,14 +404,19 @@ async def verify_razorpay_payment(payload: RazorpayVerifyRequest):
         "gateway_txn_id": payload.razorpay_payment_id,
         "cashback": "0",
         "timestamp": timestamp,
-        "order_id": payload.razorpay_order_id,
-        "metadata": json.dumps(metadata),
+        "order_id": canonical_order_id,
+        "metadata": json.dumps({**metadata, "customer_id": customer_id} if customer_id else metadata),
     }
 
-    user_key = payload.user_id or payload.razorpay_payment_id
-    _store_transaction_safely(payload.razorpay_payment_id, transaction_payload, user_key, amount_rupees)
+    user_key = payload.user_id or payment_id
+    _store_transaction_safely(payment_id, transaction_payload, user_key, amount_rupees)
 
-    return {"status": "ok", "payment_id": payload.razorpay_payment_id}
+    return {
+        "status": "ok",
+        "payment_id": payment_id,
+        "order_id": canonical_order_id,
+        "gateway_payment_id": payload.razorpay_payment_id,
+    }
 
 
 app.include_router(razorpay_router)
@@ -344,8 +441,18 @@ async def process_payment(request: PaymentRequest):
                 detail=f"Invalid payment method: {request.payment_method}. Supported: upi, card, wallet, netbanking, cod"
             )
         
-        # Step 2: Generate transaction ID
-        transaction_id = f"TXN_{uuid.uuid4().hex[:12].upper()}"
+        # Step 2: Generate canonical payment and order identifiers
+        payment_id = payment_repository.generate_next_payment_id()
+        original_order_reference = request.order_id or ""
+        if orders_repository.is_valid_order_id(original_order_reference):
+            canonical_order_id = original_order_reference
+        else:
+            canonical_order_id = orders_repository.generate_next_order_id()
+
+        customer_id = _resolve_customer_id(
+            request.user_id,
+            request.metadata if isinstance(request.metadata, dict) else None,
+        )
         
         # Step 3: Simulate payment gateway
         gateway_response = redis_utils.simulate_payment_gateway(
@@ -360,24 +467,34 @@ async def process_payment(request: PaymentRequest):
         cashback = redis_utils.calculate_cashback(request.amount, request.payment_method)
         
         # Step 5: Store transaction
+        timestamp = datetime.now().isoformat()
+        metadata_payload = {
+            "source": "process_payment",
+            "original_order_reference": original_order_reference,
+        }
+        if isinstance(request.metadata, dict) and request.metadata:
+            metadata_payload["request_metadata"] = request.metadata
+        if customer_id:
+            metadata_payload["customer_id"] = customer_id
+
         transaction_data = {
-            "transaction_id": transaction_id,
+            "transaction_id": payment_id,
             "user_id": request.user_id,
             "amount": str(request.amount),
             "payment_method": request.payment_method,
             "status": "success",
             "gateway_txn_id": gateway_response["gateway_txn_id"],
             "cashback": str(cashback),
-            "timestamp": datetime.now().isoformat(),
-            "order_id": request.order_id or "",
-            "metadata": str(request.metadata)
+            "timestamp": timestamp,
+            "order_id": canonical_order_id,
+            "metadata": json.dumps(metadata_payload),
         }
         
-        redis_utils.store_transaction(transaction_id, transaction_data)
+        redis_utils.store_transaction(payment_id, transaction_data)
         
         # Step 6: Log payment attempt
         redis_utils.store_payment_attempt(request.user_id, {
-            "transaction_id": transaction_id,
+            "transaction_id": payment_id,
             "amount": request.amount,
             "status": "success"
         })
@@ -407,32 +524,71 @@ async def process_payment(request: PaymentRequest):
                 new_tier = loyalty_result.get('current_tier')
                 response_message += f" 🏆 Upgraded to {new_tier}!"
         
-        # Register order if order_id is provided (create basic order record for tracking)
-        if request.order_id:
+        # Register / update order to ensure Supabase FK integrity
+        try:
+            items_payload = []
+            if isinstance(request.metadata, dict):
+                items_payload = request.metadata.get('items', []) or []
+
+            orders_repository.upsert_order_record({
+                'order_id': canonical_order_id,
+                'customer_id': customer_id,
+                'items': items_payload,
+                'total_amount': round(request.amount, 2),
+                'status': 'paid',
+                'created_at': timestamp
+            })
+            logger.info(f"✅ Order registered: {canonical_order_id} (payment: {payment_id})")
+        except Exception as e:
+            logger.warning(f"⚠️  Failed to register order {canonical_order_id}: {e}")
+
+        # Persist payment record to shared dataset / Supabase
+        try:
+            amount_decimal = Decimal(str(request.amount)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
             try:
-                # Create minimal order record with payment info
-                orders_repository.upsert_order_record({
-                    'order_id': request.order_id,
-                    'customer_id': str(request.user_id),
-                    'items': json.dumps([]),  # Empty items for now (frontend will have details)
-                    'total_amount': round(request.amount, 2),
-                    'status': 'placed',
-                    'created_at': datetime.now().isoformat()
-                })
-                logger.info(f"✅ Order registered: {request.order_id} (payment: {transaction_id})")
-            except Exception as e:
-                logger.warning(f"⚠️  Failed to register order {request.order_id}: {e}")
+                discount_source = request.metadata.get("discount_applied", 0)
+                discount_value = Decimal(str(discount_source))
+            except (InvalidOperation, TypeError, ValueError):
+                discount_value = Decimal("0")
+            discount_value = discount_value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+            if "gst" in request.metadata:
+                try:
+                    gst_source = request.metadata.get("gst", 0)
+                    gst_value = Decimal(str(gst_source))
+                except (InvalidOperation, TypeError, ValueError):
+                    gst_value = amount_decimal * Decimal("0.18")
+            else:
+                gst_value = amount_decimal * Decimal("0.18")
+            gst_value = gst_value.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+            payment_id = payment_repository.upsert_payment_record(
+                {
+                    "payment_id": payment_id,
+                    "order_id": canonical_order_id,
+                    "status": "success",
+                    "amount_rupees": _quantize(amount_decimal),
+                    "discount_applied": _quantize(discount_value),
+                    "gst": _quantize(gst_value),
+                    "method": request.payment_method,
+                    "gateway_ref": gateway_response["gateway_txn_id"],
+                    "idempotency_key": request.metadata.get("idempotency_key", payment_id) if isinstance(request.metadata, dict) else payment_id,
+                    "created_at": timestamp,
+                }
+            )
+        except Exception as exc:
+            logger.warning(f"⚠️  Failed to persist payment record {payment_id}: {exc}")
         
         return PaymentResponse(
             success=True,
-            transaction_id=transaction_id,
+            transaction_id=payment_id,
             amount=request.amount,
             payment_method=request.payment_method,
             gateway_txn_id=gateway_response["gateway_txn_id"],
             cashback=cashback,
             message=response_message,
-            timestamp=datetime.now().isoformat(),
-            order_id=request.order_id
+            timestamp=timestamp,
+            order_id=canonical_order_id
         )
         
     except HTTPException:
