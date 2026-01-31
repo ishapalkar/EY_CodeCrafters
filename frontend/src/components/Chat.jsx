@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Send, Check, CheckCheck, Phone, Video, Mic, MicOff, User, X, CreditCard, LifeBuoy } from 'lucide-react';
+import { Send, Check, CheckCheck, Phone, Video, Mic, MicOff, User, X, CreditCard, LifeBuoy, CheckCircle } from 'lucide-react';
 import { createRazorpayOrder, verifyRazorpayPayment, getNextOrderId } from '../services/paymentService';
 import { getTierInfo } from '../services/loyaltyService';
+import { setDeliveryWindow } from '../services/fulfillmentService';
 import API_ENDPOINTS from '../config/api';
 import sessionStore from '../lib/session';
 import salesAgentService from '../services/salesAgentService';
@@ -141,10 +142,18 @@ const Chat = () => {
   const [addressError, setAddressError] = useState('');
   const [savedAddress, setSavedAddress] = useState(null);
   const [pendingPaymentDetails, setPendingPaymentDetails] = useState(null);
+  const [showDeliveryModal, setShowDeliveryModal] = useState(false);
+  const [deliveryOrderId, setDeliveryOrderId] = useState(null);
+  const [selectedDeliveryWindow, setSelectedDeliveryWindow] = useState(null);
+  const [lastTrackedOrderId, setLastTrackedOrderId] = useState(null);
+  const [lastOrderStatus, setLastOrderStatus] = useState(null);
+  const [wsConnected, setWsConnected] = useState(false);
   const messagesEndRef = useRef(null);
   const recognitionRef = useRef(null);
   const transcriptRef = useRef('');
   const paymentInFlightRef = useRef(false);
+  const statusPollingRef = useRef(null);
+  const websocketRef = useRef(null);
 
   const supportActions = [
     { key: 'return', label: 'Start Return', caption: 'Schedule pickup and refund', emoji: '📦' },
@@ -840,6 +849,10 @@ const Chat = () => {
             const gatewayPaymentId =
               verificationResult?.gateway_payment_id || response.razorpay_payment_id;
 
+            // Show delivery window selection modal
+            setDeliveryOrderId(canonicalOrderId);
+            setShowDeliveryModal(true);
+
             let successText =
               `✅ Payment of ₹${parsedAmount} received!\nOrder ID: ${canonicalOrderId}\nPayment ID: ${canonicalPaymentId}`;
             
@@ -1171,6 +1184,52 @@ const Chat = () => {
   const handlePaymentClick = async () => {
     // You can implement a generic payment action here if needed.
     // For now, it does nothing.
+  };
+
+  const handleDeliveryWindowSelection = async (window) => {
+    try {
+      console.log('🚚 Setting delivery window:', window, 'for order:', deliveryOrderId);
+      setSelectedDeliveryWindow(window);
+      
+      if (!deliveryOrderId) {
+        console.error('No order ID available for delivery window');
+        await appendAgentMessage(
+          `⚠️ Order ID not found. Please contact support.`
+        );
+        return;
+      }
+      
+      const response = await setDeliveryWindow({
+        order_id: deliveryOrderId,
+        delivery_window: window
+      });
+      
+      console.log('✅ Delivery window response:', response);
+      
+      if (response && (response.success || response.delivery_window || response.status === 'success')) {
+        // Success - start tracking this order for delivery updates
+        setLastTrackedOrderId(deliveryOrderId);
+        setLastOrderStatus(null);
+        
+        // Close modal and show confirmation
+        setShowDeliveryModal(false);
+        await appendAgentMessage(
+          `🚚 Perfect! Your delivery is scheduled for the ${window} slot (${window === 'morning' ? '6AM-12PM' : window === 'afternoon' ? '12PM-6PM' : '6PM-10PM'}). We'll send you updates soon!`
+        );
+      } else {
+        // Unexpected response but don't auto-close
+        console.warn('Unexpected delivery window response:', response);
+        await appendAgentMessage(
+          `⚠️ Unable to confirm delivery window. Please try selecting again or skip for now.`
+        );
+      }
+    } catch (error) {
+      console.error('❌ Delivery window error:', error);
+      // Don't close modal on error - let user try again or skip
+      await appendAgentMessage(
+        `⚠️ Connection error. Please try selecting your delivery window again, or click Skip to continue.`
+      );
+    }
   };
 
   const sendMessageToAgent = async (messageText, { skipBackend = false } = {}) => {
@@ -2419,6 +2478,87 @@ const Chat = () => {
                     </button>
                   </div>
                 </form>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delivery Window Selection Modal */}
+      {showDeliveryModal && deliveryOrderId && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full mx-4">
+            {/* Modal Header */}
+            <div className="bg-gradient-to-r from-blue-600 to-blue-700 text-white p-6">
+              <h2 className="text-2xl font-bold">🚚 Select Your Delivery Slot</h2>
+              <p className="text-blue-100 mt-2">Choose your preferred delivery time window</p>
+            </div>
+
+            {/* Modal Body */}
+            <div className="p-8">
+              <p className="text-gray-600 mb-6">
+                Order ID: <span className="font-semibold text-gray-900">{deliveryOrderId}</span>
+              </p>
+
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
+                {[
+                  { id: 'morning', label: '🌅 Morning', time: '06:00 AM - 12:00 PM', description: 'Early bird delivery' },
+                  { id: 'afternoon', label: '☀️ Afternoon', time: '12:00 PM - 06:00 PM', description: 'Standard delivery' },
+                  { id: 'evening', label: '🌆 Evening', time: '06:00 PM - 10:00 PM', description: 'Late delivery' }
+                ].map((window) => (
+                  <button
+                    key={window.id}
+                    onClick={() => handleDeliveryWindowSelection(window.id)}
+                    className={`p-4 rounded-lg border-2 transition-all ${
+                      selectedDeliveryWindow === window.id
+                        ? 'border-blue-600 bg-blue-50 ring-2 ring-blue-300'
+                        : 'border-gray-200 hover:border-blue-400'
+                    }`}
+                  >
+                    <div className="text-2xl mb-2">{window.label.split(' ')[0]}</div>
+                    <div className="font-semibold text-gray-900">{window.label.split(' ').slice(1).join(' ')}</div>
+                    <div className="text-sm text-gray-600 mt-1">{window.time}</div>
+                    <div className="text-xs text-gray-500 mt-2">{window.description}</div>
+                    {selectedDeliveryWindow === window.id && (
+                      <div className="mt-3 flex items-center justify-center">
+                        <CheckCircle className="w-5 h-5 text-blue-600" />
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              {/* Additional Options */}
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+                <div className="flex items-start gap-3">
+                  <div className="flex-shrink-0 w-6 h-6 rounded-full bg-blue-200 flex items-center justify-center text-xs font-bold text-blue-600">
+                    ℹ️
+                  </div>
+                  <div>
+                    <p className="font-semibold text-gray-900">💡 Tips for smooth delivery:</p>
+                    <ul className="text-sm text-gray-700 mt-2 space-y-1 list-disc list-inside">
+                      <li>Please keep your phone accessible during the delivery window</li>
+                      <li>You'll receive an OTP on your registered number before delivery</li>
+                      <li>Our delivery partner will contact you 30 minutes before arrival</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              {/* Skip Button */}
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setShowDeliveryModal(false)}
+                  className="flex-1 py-3 rounded-lg font-semibold bg-gray-300 text-gray-700 hover:bg-gray-400 transition-all"
+                >
+                  Skip for Now
+                </button>
+              </div>
+
+              {selectedDeliveryWindow && (
+                <p className="text-center text-sm text-green-600 mt-4">
+                  ✓ Click on your preferred slot to confirm
+                </p>
               )}
             </div>
           </div>

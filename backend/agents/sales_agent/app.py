@@ -162,6 +162,72 @@ async def health_check():
     }
 
 
+class CheckoutRequest(BaseModel):
+    """Request model for checkout."""
+    customer_id: str = Field(..., description="Customer ID")
+    items: List[Dict[str, Any]] = Field(..., description="List of items to purchase")
+    payment_method: Dict[str, Any] = Field(..., description="Payment method details")
+    shipping_address: Dict[str, Any] = Field(..., description="Shipping address")
+    session_token: Optional[str] = Field(None, description="Session token")
+
+
+@app.post("/api/checkout")
+async def handle_checkout(request: CheckoutRequest):
+    """
+    Complete checkout flow: inventory -> payment -> fulfillment.
+    
+    This endpoint orchestrates the full purchase flow across all microservices:
+    1. Verify inventory availability
+    2. Create inventory holds
+    3. Process payment
+    4. Start fulfillment
+    5. Persist order record
+    
+    Args:
+        request: CheckoutRequest with customer, items, payment, and shipping info
+        
+    Returns:
+        Order completion status with order_id and fulfillment details
+    """
+    logger.info(f"🛒 Checkout initiated for customer: {request.customer_id}")
+    
+    try:
+        # Import the agent client
+        from agent_client import SalesAgentClient
+        
+        # Create agent instance
+        agent = SalesAgentClient()
+        
+        # Execute complete purchase flow
+        result = await agent.complete_purchase_flow(
+            customer_id=request.customer_id,
+            items=request.items,
+            payment_method=request.payment_method,
+            shipping_address=request.shipping_address
+        )
+        
+        logger.info(f"✅ Checkout completed: {result['status']} - Order: {result.get('order_id')}")
+        
+        # Return formatted response
+        return {
+            "status": result['status'],
+            "order_id": result.get('order_id'),
+            "steps": result.get('steps', {}),
+            "message": "Order placed successfully" if result['status'] == 'completed' else f"Order {result['status']}"
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Checkout failed: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "status": "error",
+                "error": str(e),
+                "message": "Failed to process checkout"
+            }
+        )
+
+
 @app.post("/api/message", response_model=AgentResponse)
 async def handle_message(request: MessageRequest):
     """

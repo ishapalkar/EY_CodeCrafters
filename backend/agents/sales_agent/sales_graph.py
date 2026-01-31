@@ -90,6 +90,39 @@ WORKER_TIMEOUT_SECONDS = int(os.getenv("SALES_AGENT_WORKER_TIMEOUT", "25"))
 # HELPER FUNCTIONS
 # ============================================================================
 
+def infer_gender_from_relation(relation: str) -> str:
+    """
+    Infer recipient gender from relationship.
+    
+    Args:
+        relation: Relationship string (e.g., 'mother', 'father', 'sister')
+        
+    Returns:
+        'male', 'female', or 'unisex'
+    """
+    relation_lower = relation.lower().strip()
+    
+    # Female relations
+    female_relations = {
+        'mother', 'mom', 'mama', 'mum', 'mummy', 'grandmother', 'grandma', 'grandmom',
+        'sister', 'sis', 'daughter', 'wife', 'girlfriend', 'gf', 'aunt', 'aunty',
+        'niece', 'cousin'  # cousin can be either, but often female in gifting context
+    }
+    
+    # Male relations
+    male_relations = {
+        'father', 'dad', 'papa', 'grandfather', 'grandpa', 'granddad',
+        'brother', 'bro', 'son', 'husband', 'boyfriend', 'bf', 'uncle',
+        'nephew'
+    }
+    
+    if relation_lower in female_relations:
+        return 'female'
+    elif relation_lower in male_relations:
+        return 'male'
+    else:
+        return 'unisex'
+
 def resolve_product_to_sku(product_identifier: str) -> Optional[str]:
     """
     Resolve product name or SKU to actual SKU.
@@ -590,8 +623,14 @@ async def call_recommendation_worker(state: SalesAgentState) -> SalesAgentState:
         if state["intent"] == "gifting" or state["entities"].get("occasion") in ["birthday", "gift", "anniversary"]:
             payload["mode"] = "gifting_genius"
             payload["recipient_relation"] = state["entities"].get("recipient_relation", "friend")
-            payload["recipient_gender"] = state["entities"].get("gender", "unisex")
+            
+            # Infer gender from relation if not explicitly provided
+            recipient_relation = state["entities"].get("recipient_relation", "")
+            explicit_gender = state["entities"].get("gender")
+            payload["recipient_gender"] = explicit_gender or infer_gender_from_relation(recipient_relation) or "unisex"
+            
             payload["occasion"] = state["entities"].get("occasion", "gift")
+            logger.info(f"🎁 Gifting mode: relation={recipient_relation}, inferred_gender={payload['recipient_gender']}, occasion={payload['occasion']}")
         elif state["intent"] == "trend":
             payload["mode"] = "trendseer"
         
@@ -927,8 +966,9 @@ async def call_fulfillment_worker(state: SalesAgentState) -> SalesAgentState:
             message = state.get("message", "")
             logger.info(f"📝 Searching for order ID in message: {message}")
             import re
-            # Look for patterns like ORD-xxx, ORD_xxx, or ORD000894 (must have digit or special char after ORD)
-            match = re.search(r'\b(ORD(?:[-_]?\d+[-\w]*|[-_]\w+))\b', message, re.IGNORECASE)
+            # Look for patterns like ORD000936, ORD-20260131, ORD_123, etc.
+            # Match ORD followed by digits/hyphens/underscores (at least 3 chars after ORD)
+            match = re.search(r'\b(ORD[-_]?\w{3,})\b', message, re.IGNORECASE)
             if match:
                 order_id = match.group(1).upper()
                 logger.info(f"✅ Found order ID via regex: {order_id}")
@@ -987,14 +1027,30 @@ async def call_fulfillment_worker(state: SalesAgentState) -> SalesAgentState:
                 
                 status_msg = status_messages.get(status, f"Status: {status}")
                 
-                state["response"] = (
+                # Build the response message
+                response_msg = (
                     f"Order {order_id}:\n\n"
                     f"{status_msg}\n\n"
                     f"📍 Tracking ID: {tracking_id}\n"
                     f"🚛 Courier: {courier}\n"
-                    f"📅 ETA: {eta}\n\n"
-                    "Need help with anything else?"
+                    f"📅 ETA: {eta}"
                 )
+                
+                # Add delivery details if OUT_FOR_DELIVERY
+                if status == 'OUT_FOR_DELIVERY':
+                    delivery_boy = fulfillment.get('delivery_boy_name', '')
+                    delivery_phone = fulfillment.get('delivery_boy_phone', '')
+                    delivery_otp = fulfillment.get('delivery_otp', '')
+                    
+                    if delivery_boy:
+                        response_msg += f"\n\n👤 Delivery Partner: {delivery_boy}"
+                    if delivery_phone:
+                        response_msg += f"\n📱 Phone: {delivery_phone}"
+                    if delivery_otp:
+                        response_msg += f"\n🔐 OTP for Verification: {delivery_otp}"
+                
+                response_msg += "\n\nNeed help with anything else?"
+                state["response"] = response_msg
                 state["cards"] = []
                 logger.info(f"✅ Order status retrieved: {order_id} - {status}")
             else:

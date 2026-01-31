@@ -378,7 +378,48 @@ def flush_all() -> bool:
         for key in redis_client.scan_iter(match=pattern):
             redis_client.delete(key)
     
+    
     return True
+
+
+# ==========================================
+# SCANNING OPERATIONS
+# ==========================================
+
+def scan_fulfillments(cursor: int = 0, count: int = 100) -> tuple:
+    """
+    Scan all fulfillment keys in Redis.
+    
+    Args:
+        cursor: Redis scan cursor (start with 0)
+        count: Number of keys to return per iteration
+    
+    Returns:
+        Tuple of (next_cursor, list_of_order_ids)
+    """
+    if not redis_client:
+        raise RuntimeError("Redis client not initialized")
+    
+    try:
+        cursor, keys = redis_client.scan(cursor, match="fulfillment:*", count=count)
+        order_ids = []
+        for key in keys:
+            if isinstance(key, bytes):
+                order_id = key.decode('utf-8').replace("fulfillment:", "")
+            else:
+                order_id = key.replace("fulfillment:", "")
+            order_ids.append(order_id)
+        return cursor, order_ids
+    except Exception as e:
+        print(f"Error scanning fulfillments: {e}")
+        return 0, []
+
+
+def get_redis_connection():
+    """Get the Redis client connection."""
+    if not redis_client:
+        raise RuntimeError("Redis client not initialized")
+    return redis_client
 
 
 # ==========================================
@@ -405,3 +446,4 @@ def get_fulfillment_stats() -> Dict[str, Any]:
         stats["by_status"][status] = get_fulfillment_count(status)
     
     return stats
+

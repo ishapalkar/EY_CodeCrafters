@@ -60,6 +60,36 @@ def generate_next_order_id() -> str:
         return _generate_next_order_id(rows)
 
 
+def get_order(order_id: str) -> Dict[str, Any] | None:
+    """Retrieve an order by order_id from the CSV file.
+    
+    Args:
+        order_id: The order ID to retrieve
+        
+    Returns:
+        Order dict with parsed items as list/dict, or None if not found
+    """
+    if not order_id:
+        return None
+    
+    with _WRITE_LOCK:
+        rows = _load_existing_rows()
+        row = rows.get(order_id)
+        
+        if not row:
+            return None
+        
+        # Parse items from JSON string if needed
+        result = dict(row)
+        if result.get("items"):
+            try:
+                result["items"] = json.loads(result["items"])
+            except json.JSONDecodeError:
+                pass
+        
+        return result
+
+
 def upsert_order_record(record: Dict[str, Any]) -> None:
     """Insert or update an order entry in orders.csv in a threadsafe way."""
     if "order_id" not in record or not record["order_id"]:
@@ -132,6 +162,7 @@ def _prepare_supabase_payload(record: Dict[str, Any]) -> Dict[str, Any]:
 
 def _sync_to_supabase(record: Dict[str, Any]) -> None:
     if not supabase_client.is_write_enabled():
+        logger.warning(f"[orders_repository] Supabase write is DISABLED - order {record.get('order_id')} NOT synced")
         return
 
     payload = _prepare_supabase_payload(record)
@@ -142,10 +173,10 @@ def _sync_to_supabase(record: Dict[str, Any]) -> None:
             payload,
             conflict_column="order_id",
         )
-        logger.info("[orders_repository] Synced order %s to Supabase", record.get("order_id"))
+        logger.info("[orders_repository] ✅ Synced order %s to Supabase", record.get("order_id"))
     except Exception as exc:
         logger.warning(
-            "[orders_repository] Failed to sync order %s to Supabase: %s",
+            "[orders_repository] ❌ Failed to sync order %s to Supabase: %s",
             record.get("order_id"),
             exc,
         )

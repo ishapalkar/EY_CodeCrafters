@@ -280,7 +280,19 @@ Respond with ONLY the JSON object, no additional text."""
         response_text = response_text.strip()
         
         try:
-            result = json.loads(response_text)
+            # Try to fix common JSON issues
+            fixed_text = response_text
+            
+            # Remove trailing commas before closing braces/brackets
+            fixed_text = re.sub(r',\s*([}\]])', r'\1', fixed_text)
+            
+            # Add missing closing braces if needed
+            open_braces = fixed_text.count('{')
+            close_braces = fixed_text.count('}')
+            if open_braces > close_braces:
+                fixed_text += '}' * (open_braces - close_braces)
+            
+            result = json.loads(fixed_text)
             
             # Validate required fields
             if "intent" not in result:
