@@ -56,6 +56,7 @@ export const API_ENDPOINTS = {
   FULFILLMENT_UPDATE: `${API_BASE_URL}:8004/fulfillment/update-status`,
   FULFILLMENT_DELIVERED: `${API_BASE_URL}:8004/fulfillment/mark-delivered`,
   FULFILLMENT_CANCEL: `${API_BASE_URL}:8004/fulfillment/cancel-order`,
+  FULFILLMENT_SET_DELIVERY_WINDOW: `${API_BASE_URL}:8004/fulfillment/set-delivery-window`,
 
   // Post-Purchase Agent
   POST_PURCHASE: `${API_BASE_URL}:8005`,

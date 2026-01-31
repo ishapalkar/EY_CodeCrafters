@@ -14,7 +14,7 @@ Key Endpoints:
 - GET  /fulfillment/{order_id}
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
@@ -29,6 +29,8 @@ import redis_utils
 import json
 import sys
 from pathlib import Path
+from apscheduler.schedulers.background import BackgroundScheduler
+import asyncio
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 import orders_repository
 
@@ -42,6 +44,42 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# WebSocket connections manager
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+        logger.info(f"✅ WebSocket connected. Total connections: {len(self.active_connections)}")
+
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.remove(websocket)
+        logger.info(f"❌ WebSocket disconnected. Total connections: {len(self.active_connections)}")
+
+    async def broadcast_delivery_update(self, order_id: str, fulfillment_data: dict):
+        """Broadcast delivery status update to all connected clients"""
+        message = {
+            "type": "delivery_update",
+            "order_id": order_id,
+            "fulfillment": fulfillment_data
+        }
+        disconnected = []
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+                logger.info(f"📤 Sent delivery update for {order_id}")
+            except Exception as e:
+                logger.error(f"Error sending to WebSocket: {e}")
+                disconnected.append(connection)
+        
+        # Remove disconnected clients
+        for conn in disconnected:
+            self.active_connections.remove(conn)
+
+manager = ConnectionManager()
+
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
@@ -50,6 +88,139 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Initialize scheduler for auto-progression
+scheduler = BackgroundScheduler()
+scheduler.start()
+
+
+def _schedule_next_progression(order_id: str):
+    """Schedule the next status progression after 60 seconds."""
+    
+    def progress_order():
+        """Auto-progress the order to next status."""
+        try:
+            fulfillment_data = redis_utils.get_fulfillment(order_id)
+            if not fulfillment_data:
+                logger.warning(f"Order {order_id} not found for auto-progression")
+                return
+            
+            # Clean up old data format before creating FulfillmentRecord
+            if isinstance(fulfillment_data.get('current_status'), str) and 'FulfillmentStatus.' in fulfillment_data['current_status']:
+                fulfillment_data['current_status'] = fulfillment_data['current_status'].split('.')[-1]
+            if isinstance(fulfillment_data.get('courier_partner'), str) and 'CourierPartner.' in fulfillment_data['courier_partner']:
+                fulfillment_data['courier_partner'] = fulfillment_data['courier_partner'].split('.')[-1].title().replace('_', ' ')
+            addr = fulfillment_data.get('delivery_address')
+            if addr == '' or addr == '{}':
+                fulfillment_data['delivery_address'] = None
+            elif isinstance(addr, str):
+                try:
+                    fulfillment_data['delivery_address'] = json.loads(addr)
+                except:
+                    fulfillment_data['delivery_address'] = None
+            
+            fulfillment = FulfillmentRecord(**fulfillment_data)
+            
+            if not fulfillment.auto_progression_enabled:
+                logger.info(f"Auto-progression disabled for order {order_id}")
+                return
+            
+            # Define status progression
+            status_progression = [
+                FulfillmentStatus.PROCESSING,
+                FulfillmentStatus.PACKED,
+                FulfillmentStatus.SHIPPED,
+                FulfillmentStatus.OUT_FOR_DELIVERY,
+                FulfillmentStatus.DELIVERED
+            ]
+            
+            # Find current index
+            try:
+                current_index = status_progression.index(fulfillment.current_status)
+            except ValueError:
+                logger.error(f"Invalid status for order {order_id}: {fulfillment.current_status}")
+                return
+            
+            # Progress to next status if not at end
+            if current_index < len(status_progression) - 1:
+                next_status = status_progression[current_index + 1]
+                old_status = fulfillment.current_status
+                
+                # Update status
+                fulfillment.current_status = next_status
+                _update_status_timestamp(fulfillment, next_status)
+                
+                # Special handling for OUT_FOR_DELIVERY
+                if next_status == FulfillmentStatus.OUT_FOR_DELIVERY:
+                    # Generate OTP
+                    otp = _generate_otp()
+                    fulfillment.delivery_otp = otp
+                    fulfillment.delivery_otp_generated_at = _now_iso()
+                    logger.warning(f"🔐 AUTO-PROGRESSION OTP for {order_id}: {otp}")
+                    
+                    # Assign a mock delivery boy (in production, assign real one)
+                    if not fulfillment.delivery_boy_name:
+                        delivery_boys = [
+                            ("Rajesh Kumar", "9876543210"),
+                            ("Amit Singh", "9765432109"),
+                            ("Priya Sharma", "9654321098"),
+                            ("Mohammad Ali", "9543210987"),
+                        ]
+                        boy_name, boy_phone = random.choice(delivery_boys)
+                        fulfillment.delivery_boy_name = boy_name
+                        fulfillment.delivery_boy_phone = boy_phone
+                        fulfillment.delivery_boy_assigned_at = _now_iso()
+                        logger.info(f"👤 Delivery boy auto-assigned to {order_id}: {boy_name} ({boy_phone})")
+                
+                # Save to Redis - use model_dump with mode='json' to properly serialize enums
+                fulfillment_dict = fulfillment.model_dump(mode='json') if hasattr(fulfillment, 'model_dump') else fulfillment.dict()
+                redis_utils.store_fulfillment(order_id, fulfillment_dict)
+                
+                # Log event
+                redis_utils.add_fulfillment_event(order_id, {
+                    "event_type": "STATUS_UPDATED",
+                    "timestamp": _now_iso(),
+                    "details": {
+                        "from_status": str(old_status),
+                        "to_status": str(next_status),
+                        "auto_progression": True
+                    }
+                })
+                
+                logger.info(f"⏱️ AUTO-PROGRESSION: {order_id} → {next_status.value}")
+                
+                # Broadcast WebSocket event for OUT_FOR_DELIVERY and DELIVERED
+                if next_status in [FulfillmentStatus.OUT_FOR_DELIVERY, FulfillmentStatus.DELIVERED]:
+                    try:
+                        # Create event loop if needed and broadcast
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(manager.broadcast_delivery_update(order_id, fulfillment_dict))
+                        loop.close()
+                        logger.info(f"📡 WebSocket broadcast sent for {order_id} - {next_status.value}")
+                    except Exception as e:
+                        logger.error(f"Failed to broadcast WebSocket: {e}")
+                
+                # Schedule next progression if not delivered
+                if next_status != FulfillmentStatus.DELIVERED:
+                    _schedule_next_progression(order_id)
+            else:
+                logger.info(f"✅ Order {order_id} completed all progression states")
+        
+        except Exception as e:
+            logger.error(f"Error in auto-progression for {order_id}: {e}", exc_info=True)
+    
+    # Schedule the progression to happen after 60 seconds
+    # Use datetime.now() instead of utcnow() to match scheduler's timezone
+    job_id = f"progress_{order_id}_{uuid.uuid4()}"
+    scheduler.add_job(
+        progress_order,
+        'date',
+        run_date=datetime.now() + timedelta(seconds=60),
+        id=job_id,
+        replace_existing=False
+    )
+    logger.info(f"⏰ Scheduled auto-progression for {order_id} in 60 seconds (job_id: {job_id})")
 
 # ============================================================================
 # ENUMS
@@ -65,11 +236,11 @@ class FulfillmentStatus(str, Enum):
 
 
 class CourierPartner(str, Enum):
-    """Predefined courier partners."""
+    """Predefined courier partners (Indian carriers)."""
+    DELHIVERY = "Delhivery"
+    BLUEDART = "Bluedart"
+    DTDC = "DTDC"
     FEDEX = "FedEx"
-    UPS = "UPS"
-    AMAZON = "Amazon Logistics"
-    DHL = "DHL"
     LOCAL = "Local Courier"
 
 
@@ -82,6 +253,13 @@ class EventType(str, Enum):
     RETURN_INITIATED = "RETURN_INITIATED"
     STOCK_RELEASED = "STOCK_RELEASED"
     REFUND_INITIATED = "REFUND_INITIATED"
+
+
+class DeliveryWindow(str, Enum):
+    """Delivery time window preferences."""
+    MORNING = "morning"      # 6 AM - 12 PM
+    AFTERNOON = "afternoon"  # 12 PM - 6 PM
+    EVENING = "evening"      # 6 PM - 10 PM
 
 
 # ============================================================================
@@ -115,6 +293,18 @@ class FulfillmentRecord(BaseModel):
     # Integration tracking
     inventory_hold_id: Optional[str] = None  # Hold ID from inventory agent
     payment_transaction_id: Optional[str] = None  # Transaction ID from payment agent
+    # Delivery features
+    delivery_window: Optional[str] = None  # morning/afternoon/evening
+    delivery_address: Optional[Dict[str, Any]] = None
+    address_added_at: Optional[str] = None
+    delivery_boy_name: Optional[str] = None
+    delivery_boy_phone: Optional[str] = None
+    delivery_boy_assigned_at: Optional[str] = None
+    delivery_otp: Optional[str] = None
+    delivery_otp_generated_at: Optional[str] = None
+    delivery_otp_verified: bool = False
+    delivery_otp_verified_at: Optional[str] = None
+    auto_progression_enabled: bool = False
 
 
 # ============================================================================
@@ -170,6 +360,40 @@ class FulfillmentResponse(BaseModel):
     fulfillment: Optional[FulfillmentRecord] = None
 
 
+class DeliveryAddressRequest(BaseModel):
+    """Request to store delivery address."""
+    order_id: str = Field(..., description="Order ID")
+    phone: str = Field(..., description="Customer phone")
+    address_line_1: str = Field(..., description="Address line 1")
+    address_line_2: Optional[str] = Field(None, description="Address line 2")
+    city: str = Field(..., description="City")
+    state: str = Field(..., description="State")
+    pincode: str = Field(..., description="Pincode")
+    landmark: Optional[str] = Field(None, description="Landmark")
+
+
+class SetDeliveryWindowRequest(BaseModel):
+    """Request to set delivery window."""
+    order_id: str = Field(..., description="Order ID")
+    delivery_window: str = Field(..., description="morning|afternoon|evening")
+    phone: Optional[str] = Field(None, description="Customer phone")
+
+
+class DeliveryBoyAssignRequest(BaseModel):
+    """Request to assign delivery boy."""
+    order_id: str = Field(..., description="Order ID")
+    name: str = Field(..., description="Delivery boy name")
+    phone: str = Field(..., description="Delivery boy phone")
+    vehicle_number: Optional[str] = Field(None, description="Vehicle number")
+
+
+class OTPVerificationRequest(BaseModel):
+    """Request to verify delivery OTP."""
+    order_id: str = Field(..., description="Order ID")
+    otp: str = Field(..., description="6-digit OTP")
+    phone: str = Field(..., description="Customer phone")
+
+
 # ============================================================================
 # REDIS STORE (Persistent fulfillment data)
 # ============================================================================
@@ -196,6 +420,11 @@ def _generate_tracking_id() -> str:
 def _select_courier() -> CourierPartner:
     """Randomly select a courier partner."""
     return random.choice(list(CourierPartner))
+
+
+def _generate_otp() -> str:
+    """Generate a 6-digit OTP."""
+    return str(random.randint(100000, 999999))
 
 
 def _calculate_eta(base_days: int = 3) -> str:
@@ -408,6 +637,7 @@ def start_fulfillment(request: StartFulfillmentRequest) -> FulfillmentRecord:
         processing_at=now,
         inventory_hold_id=request.inventory_hold_id,  # Store hold ID from inventory agent
         payment_transaction_id=request.payment_transaction_id,  # Store transaction ID from payment agent
+        auto_progression_enabled=True  # ENABLE auto-progression with 1-min intervals
     )
     
     # Log initial event
@@ -426,7 +656,10 @@ def start_fulfillment(request: StartFulfillmentRequest) -> FulfillmentRecord:
     # Store in Redis
     redis_utils.store_fulfillment(request.order_id, fulfillment.dict())
     
-    logger.info(f"Fulfillment started for order {request.order_id}: {fulfillment.fulfillment_id}")
+    # Schedule auto-progression (1 minute intervals)
+    _schedule_next_progression(request.order_id)
+    
+    logger.info(f"Fulfillment started for order {request.order_id}: {fulfillment.fulfillment_id} - Auto-progression ENABLED (1 min intervals)")
     return fulfillment
 
 
@@ -909,8 +1142,8 @@ async def api_get_fulfillment(order_id: str):
                                 'shipped': FulfillmentStatus.SHIPPED,
                                 'out_for_delivery': FulfillmentStatus.OUT_FOR_DELIVERY,
                                 'delivered': FulfillmentStatus.DELIVERED,
-                                'cancelled': FulfillmentStatus.CANCELLED,
-                                'returned': FulfillmentStatus.RETURNED
+                                'cancelled': FulfillmentStatus.PROCESSING,  # Treat as processing
+                                'returned': FulfillmentStatus.DELIVERED  # Treat as delivered
                             }
                             fulfillment_status = status_map.get(order_status, FulfillmentStatus.PROCESSING)
                             
@@ -920,8 +1153,6 @@ async def api_get_fulfillment(order_id: str):
                             # Calculate ETA based on status
                             if fulfillment_status == FulfillmentStatus.DELIVERED:
                                 eta = created_at  # Already delivered
-                            elif fulfillment_status in [FulfillmentStatus.CANCELLED, FulfillmentStatus.RETURNED]:
-                                eta = created_at  # No ETA for cancelled/returned
                             elif fulfillment_status == FulfillmentStatus.SHIPPED:
                                 eta = (datetime.utcnow() + timedelta(days=1)).isoformat()
                             else:
@@ -953,6 +1184,21 @@ async def api_get_fulfillment(order_id: str):
         logger.error(f"   Raising 404")
         raise HTTPException(status_code=404, detail=f"Fulfillment not found for order {order_id}")
     
+    # Clean up old incorrectly-formatted enum values from Redis
+    if isinstance(fulfillment_data.get('current_status'), str) and 'FulfillmentStatus.' in fulfillment_data['current_status']:
+        fulfillment_data['current_status'] = fulfillment_data['current_status'].split('.')[-1]
+    if isinstance(fulfillment_data.get('courier_partner'), str) and 'CourierPartner.' in fulfillment_data['courier_partner']:
+        fulfillment_data['courier_partner'] = fulfillment_data['courier_partner'].split('.')[-1].title().replace('_', ' ')
+    # Handle delivery_address: empty string, JSON string '{}', or actual dict
+    addr = fulfillment_data.get('delivery_address')
+    if addr == '' or addr == '{}':
+        fulfillment_data['delivery_address'] = None
+    elif isinstance(addr, str):
+        try:
+            fulfillment_data['delivery_address'] = json.loads(addr)
+        except:
+            fulfillment_data['delivery_address'] = None
+    
     fulfillment = FulfillmentRecord(**fulfillment_data)
     return FulfillmentResponse(
         success=True,
@@ -977,6 +1223,426 @@ async def api_get_status(order_id: str):
         "courier_partner": fulfillment.courier_partner,
         "eta": fulfillment.eta
     }
+
+
+# ============================================================================
+# DELIVERY FEATURES ENDPOINTS
+# ============================================================================
+
+@app.post("/fulfillment/add-delivery-address", response_model=dict)
+async def api_add_delivery_address(request: DeliveryAddressRequest):
+    """
+    Store delivery address with timestamp.
+    Called by Payment Agent during checkout BEFORE payment.
+    """
+    try:
+        # Retrieve existing fulfillment or create placeholder
+        fulfillment_data = redis_utils.get_fulfillment(request.order_id)
+        
+        if fulfillment_data:
+            fulfillment = FulfillmentRecord(**fulfillment_data)
+        else:
+            # Create placeholder fulfillment if doesn't exist
+            now = _now_iso()
+            fulfillment = FulfillmentRecord(
+                fulfillment_id=str(uuid.uuid4()),
+                order_id=request.order_id,
+                current_status=FulfillmentStatus.PROCESSING,
+                tracking_id=_generate_tracking_id(),
+                courier_partner=_select_courier(),
+                eta=_calculate_eta(),
+                created_at=now,
+                processing_at=now,
+                auto_progression_enabled=False
+            )
+        
+        # Store address
+        address_dict = {
+            "phone": request.phone,
+            "address_line_1": request.address_line_1,
+            "address_line_2": request.address_line_2,
+            "city": request.city,
+            "state": request.state,
+            "pincode": request.pincode,
+            "landmark": request.landmark,
+            "added_at": _now_iso()
+        }
+        
+        fulfillment.delivery_address = address_dict
+        fulfillment.address_added_at = _now_iso()
+        
+        # Save to Redis
+        redis_utils.store_fulfillment(request.order_id, fulfillment.dict())
+        
+        logger.info(f"✅ Delivery address added for {request.order_id}")
+        
+        return {
+            "success": True,
+            "order_id": request.order_id,
+            "address_added_at": fulfillment.address_added_at,
+            "message": "Delivery address saved successfully"
+        }
+    except Exception as e:
+        logger.error(f"Error adding delivery address: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save delivery address")
+
+
+@app.post("/fulfillment/set-delivery-window", response_model=dict)
+async def api_set_delivery_window(request: SetDeliveryWindowRequest):
+    """
+    Set delivery window preference AFTER payment.
+    Creates or updates fulfillment record with delivery preference.
+    """
+    try:
+        # Validate window
+        valid_windows = ["morning", "afternoon", "evening"]
+        if request.delivery_window.lower() not in valid_windows:
+            raise HTTPException(status_code=400, detail="Invalid delivery window. Must be morning/afternoon/evening")
+        
+        # Retrieve or create fulfillment
+        fulfillment_data = redis_utils.get_fulfillment(request.order_id)
+        is_new_fulfillment = False
+        if not fulfillment_data:
+            # Create placeholder fulfillment record
+            logger.info(f"Creating placeholder fulfillment for {request.order_id}")
+            is_new_fulfillment = True
+            now = _now_iso()
+            fulfillment = FulfillmentRecord(
+                fulfillment_id=f"FULFILL-{request.order_id}",
+                order_id=request.order_id,
+                customer_phone=request.phone or "unknown",
+                current_status=FulfillmentStatus.PROCESSING,
+                tracking_id=f"TRK-{request.order_id}",
+                courier_partner=CourierPartner.DELHIVERY,
+                eta=_calculate_eta(3),  # 3 days for processing
+                delivery_window=request.delivery_window.lower(),
+                created_at=now,
+                processing_at=now,
+                auto_progression_enabled=True  # Enable auto-progression for placeholder
+            )
+        else:
+            # Clean up old incorrectly-formatted enum values from Redis
+            if isinstance(fulfillment_data.get('current_status'), str) and 'FulfillmentStatus.' in fulfillment_data['current_status']:
+                fulfillment_data['current_status'] = fulfillment_data['current_status'].split('.')[-1]
+            if isinstance(fulfillment_data.get('courier_partner'), str) and 'CourierPartner.' in fulfillment_data['courier_partner']:
+                fulfillment_data['courier_partner'] = fulfillment_data['courier_partner'].split('.')[-1].title().replace('_', ' ')
+            # Handle delivery_address: empty string, JSON string '{}', or actual dict
+            addr = fulfillment_data.get('delivery_address')
+            if addr == '' or addr == '{}':
+                fulfillment_data['delivery_address'] = None
+            elif isinstance(addr, str):
+                try:
+                    fulfillment_data['delivery_address'] = json.loads(addr)
+                except:
+                    fulfillment_data['delivery_address'] = None
+            fulfillment = FulfillmentRecord(**fulfillment_data)
+        
+        # Store window
+        fulfillment.delivery_window = request.delivery_window.lower()
+        
+        # Save to Redis - use model_dump with mode='json' to properly serialize enums
+        fulfillment_dict = fulfillment.model_dump(mode='json') if hasattr(fulfillment, 'model_dump') else fulfillment.dict()
+        redis_utils.store_fulfillment(request.order_id, fulfillment_dict)
+        
+        # Schedule auto-progression if this is a new fulfillment
+        if is_new_fulfillment:
+            _schedule_next_progression(request.order_id)
+            logger.info(f"⏱️ Auto-progression SCHEDULED for {request.order_id} (60 second intervals)")
+        
+        slot_ranges = {
+            "morning": ("06:00", "12:00"),
+            "afternoon": ("12:00", "18:00"),
+            "evening": ("18:00", "22:00")
+        }
+        start_time, end_time = slot_ranges[request.delivery_window.lower()]
+        
+        logger.info(f"📅 Delivery window set for {request.order_id}: {request.delivery_window} ({start_time}-{end_time})")
+        
+        return {
+            "success": True,
+            "order_id": request.order_id,
+            "delivery_window": request.delivery_window.lower(),
+            "time_slot": f"{start_time} - {end_time}",
+            "message": f"Delivery window set to {request.delivery_window} ({start_time} - {end_time})"
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error setting delivery window: {e}")
+        raise HTTPException(status_code=500, detail="Failed to set delivery window")
+
+
+@app.post("/fulfillment/assign-delivery-boy", response_model=dict)
+async def api_assign_delivery_boy(request: DeliveryBoyAssignRequest):
+    """
+    Assign delivery boy to order.
+    Called when order transitions to OUT_FOR_DELIVERY.
+    """
+    try:
+        fulfillment_data = redis_utils.get_fulfillment(request.order_id)
+        if not fulfillment_data:
+            raise HTTPException(status_code=404, detail="Order not found")
+        
+        fulfillment = FulfillmentRecord(**fulfillment_data)
+        
+        # Only allow when OUT_FOR_DELIVERY
+        if fulfillment.current_status != FulfillmentStatus.OUT_FOR_DELIVERY:
+            logger.warning(f"⚠️ Assigning delivery boy to order not yet OUT_FOR_DELIVERY: {request.order_id}")
+        
+        # Store delivery boy details
+        fulfillment.delivery_boy_name = request.name
+        fulfillment.delivery_boy_phone = request.phone
+        fulfillment.delivery_boy_assigned_at = _now_iso()
+        
+        redis_utils.store_fulfillment(request.order_id, fulfillment.dict())
+        
+        logger.info(f"👤 Delivery boy assigned to {request.order_id}: {request.name} ({request.phone})")
+        
+        return {
+            "success": True,
+            "order_id": request.order_id,
+            "delivery_boy": {
+                "name": request.name,
+                "phone": request.phone
+            },
+            "assigned_at": fulfillment.delivery_boy_assigned_at
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error assigning delivery boy: {e}")
+        raise HTTPException(status_code=500, detail="Failed to assign delivery boy")
+
+
+@app.get("/fulfillment/delivery-boy/{order_id}", response_model=dict)
+async def api_get_delivery_boy_details(order_id: str):
+    """
+    Get delivery boy details (name and phone only).
+    Only returns details if order is OUT_FOR_DELIVERY.
+    """
+    try:
+        fulfillment_data = redis_utils.get_fulfillment(order_id)
+        if not fulfillment_data:
+            raise HTTPException(status_code=404, detail="Order not found")
+        
+        fulfillment = FulfillmentRecord(**fulfillment_data)
+        
+        # Only show delivery boy details if OUT_FOR_DELIVERY
+        if fulfillment.current_status != FulfillmentStatus.OUT_FOR_DELIVERY:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Delivery boy details only available when OUT_FOR_DELIVERY. Current status: {fulfillment.current_status}"
+            )
+        
+        if not fulfillment.delivery_boy_name:
+            raise HTTPException(status_code=404, detail="Delivery boy not assigned yet")
+        
+        return {
+            "success": True,
+            "order_id": order_id,
+            "status": fulfillment.current_status,
+            "delivery_boy": {
+                "name": fulfillment.delivery_boy_name,
+                "phone": fulfillment.delivery_boy_phone
+            },
+            "assigned_at": fulfillment.delivery_boy_assigned_at
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error retrieving delivery boy details: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve delivery boy details")
+
+
+@app.post("/fulfillment/verify-delivery-otp", response_model=dict)
+async def api_verify_delivery_otp(request: OTPVerificationRequest):
+    """
+    Verify OTP provided by customer at delivery.
+    After successful verification, order is marked as DELIVERED.
+    Only works if order is OUT_FOR_DELIVERY.
+    """
+    try:
+        fulfillment_data = redis_utils.get_fulfillment(request.order_id)
+        if not fulfillment_data:
+            raise HTTPException(status_code=404, detail="Order not found")
+        
+        fulfillment = FulfillmentRecord(**fulfillment_data)
+        
+        # Only verify OTP if OUT_FOR_DELIVERY
+        if fulfillment.current_status != FulfillmentStatus.OUT_FOR_DELIVERY:
+            raise HTTPException(
+                status_code=400,
+                detail=f"OTP verification only for OUT_FOR_DELIVERY orders. Current: {fulfillment.current_status}"
+            )
+        
+        # Check if OTP exists
+        if not fulfillment.delivery_otp:
+            raise HTTPException(status_code=400, detail="No OTP generated for this order")
+        
+        # Check if already verified
+        if fulfillment.delivery_otp_verified:
+            raise HTTPException(status_code=400, detail="OTP already used for this order")
+        
+        # Verify OTP
+        if request.otp != fulfillment.delivery_otp:
+            logger.warning(f"❌ Invalid OTP attempt for order {request.order_id}")
+            raise HTTPException(status_code=400, detail="Invalid OTP")
+        
+        # Mark OTP as verified and transition to DELIVERED
+        fulfillment.delivery_otp_verified = True
+        fulfillment.delivery_otp_verified_at = _now_iso()
+        fulfillment.current_status = FulfillmentStatus.DELIVERED
+        fulfillment.delivered_at = _now_iso()
+        
+        redis_utils.store_fulfillment(request.order_id, fulfillment.dict())
+        
+        # Log event
+        redis_utils.add_fulfillment_event(request.order_id, {
+            "event_type": "DELIVERY_VERIFIED",
+            "timestamp": _now_iso(),
+            "details": {
+                "verification_method": "otp",
+                "verified_at": fulfillment.delivery_otp_verified_at
+            }
+        })
+        
+        logger.info(f"✅ OTP verified for {request.order_id} - Marked as DELIVERED")
+        
+        return {
+            "success": True,
+            "order_id": request.order_id,
+            "message": "OTP verified successfully. Order marked as delivered.",
+            "verified_at": fulfillment.delivery_otp_verified_at
+        }
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error verifying OTP: {e}")
+        raise HTTPException(status_code=500, detail="Failed to verify OTP")
+
+
+@app.get("/fulfillment/pending-notifications/{phone}", response_model=dict)
+async def api_get_pending_notifications(phone: str):
+    """
+    Get pending notifications when customer logs in.
+    Shows OUT_FOR_DELIVERY with delivery boy details and other important updates.
+    """
+    try:
+        pending_notifications = []
+        
+        # Scan all orders in Redis
+        cursor = 0
+        max_iterations = 1000  # Prevent infinite loops
+        iterations = 0
+        
+        while iterations < max_iterations:
+            cursor, keys = redis_utils.scan_fulfillments(cursor, count=100)
+            iterations += 1
+            
+            for order_id in keys:
+                fulfillment_data = redis_utils.get_fulfillment(order_id)
+                if not fulfillment_data:
+                    continue
+                
+                fulfillment = FulfillmentRecord(**fulfillment_data)
+                
+                # Match phone with delivery address
+                if not fulfillment.delivery_address or fulfillment.delivery_address.get("phone") != phone:
+                    continue
+                
+                status = fulfillment.current_status
+                
+                # Generate notification based on status
+                if status == FulfillmentStatus.OUT_FOR_DELIVERY:
+                    # Show delivery boy name in notification
+                    delivery_boy_name = fulfillment.delivery_boy_name or "Your delivery partner"
+                    message = f"🚗 Your order {order_id} is out for delivery! {delivery_boy_name} will arrive soon."
+                    notification_type = "out_for_delivery"
+                    
+                    notification = {
+                        "order_id": order_id,
+                        "message": message,
+                        "notification_type": notification_type,
+                        "status": status,
+                        "timestamp": fulfillment.created_at,
+                        "delivery_boy": {
+                            "name": fulfillment.delivery_boy_name,
+                            "phone": fulfillment.delivery_boy_phone
+                        } if fulfillment.delivery_boy_name else None
+                    }
+                    pending_notifications.append(notification)
+                
+                elif status == FulfillmentStatus.SHIPPED:
+                    message = f"📦 Your order {order_id} has been shipped! Tracking: {fulfillment.tracking_id}"
+                    notification_type = "shipped"
+                    
+                    notification = {
+                        "order_id": order_id,
+                        "message": message,
+                        "notification_type": notification_type,
+                        "status": status,
+                        "timestamp": fulfillment.created_at
+                    }
+                    pending_notifications.append(notification)
+                
+                elif status == FulfillmentStatus.PACKED:
+                    message = f"📦 Your order {order_id} is being packed and will ship soon!"
+                    notification_type = "packed"
+                    
+                    notification = {
+                        "order_id": order_id,
+                        "message": message,
+                        "notification_type": notification_type,
+                        "status": status,
+                        "timestamp": fulfillment.created_at
+                    }
+                    pending_notifications.append(notification)
+                
+                elif status == FulfillmentStatus.DELIVERED:
+                    message = f"✅ Your order {order_id} has been delivered successfully!"
+                    notification_type = "delivered"
+                    
+                    notification = {
+                        "order_id": order_id,
+                        "message": message,
+                        "notification_type": notification_type,
+                        "status": status,
+                        "timestamp": fulfillment.created_at
+                    }
+                    pending_notifications.append(notification)
+            
+            if cursor == 0:
+                break
+        
+        logger.info(f"Found {len(pending_notifications)} pending notifications for phone {phone}")
+        
+        return {
+            "success": True,
+            "phone": phone,
+            "notification_count": len(pending_notifications),
+            "notifications": pending_notifications
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting pending notifications: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.websocket("/ws/fulfillment")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time delivery updates"""
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Keep connection alive and listen for client messages
+            data = await websocket.receive_text()
+            logger.info(f"📨 Received from client: {data}")
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+        logger.info("Client disconnected")
+    except Exception as e:
+        logger.error(f"Error retrieving pending notifications: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve notifications")
 
 
 @app.get("/")

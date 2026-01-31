@@ -384,7 +384,21 @@ async def verify_razorpay_payment(payload: RazorpayVerifyRequest):
 
     logger.warning(f"🟡 ORDER FROM SUPABASE: {order}")
 
-    items_payload = order.get("items", [])
+    # Fallback to orders_repository if Supabase returns None
+    if not order:
+        logger.warning(f"⚠️  Order {canonical_order_id} not found in Supabase, checking local repository...")
+        try:
+            order = orders_repository.get_order(canonical_order_id)
+            if order:
+                logger.info(f"✅ Found order in local repository: {canonical_order_id}")
+            else:
+                logger.error(f"❌ Order {canonical_order_id} not found in local repository either")
+                raise HTTPException(status_code=404, detail=f"Order {canonical_order_id} not found")
+        except Exception as e:
+            logger.error(f"❌ Error fetching order from repository: {e}")
+            raise HTTPException(status_code=404, detail=f"Order {canonical_order_id} not found")
+
+    items_payload = order.get("items", []) if order else []
 
     if not items_payload:
         raise HTTPException(status_code=400, detail="Order items missing")

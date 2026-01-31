@@ -39,5 +39,10 @@ python-dotenv
 # --- Redis Database ---
 redis
 
+# --- Task Scheduling ---
+apscheduler
+
+# --- HTTP Client ---
+httpx
 
 python-multipart

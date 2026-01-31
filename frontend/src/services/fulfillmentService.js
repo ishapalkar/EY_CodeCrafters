@@ -71,10 +71,25 @@ export const cancelOrder = async (cancelData) => {
   });
 };
 
+/**
+ * Set delivery window for an order
+ * @param {Object} windowData - Delivery window data
+ * @param {string} windowData.order_id - Order ID
+ * @param {string} windowData.delivery_window - Delivery window (morning|afternoon|evening)
+ * @returns {Promise<Object>} Delivery window confirmation
+ */
+export const setDeliveryWindow = async (windowData) => {
+  return apiCall(API_ENDPOINTS.FULFILLMENT_SET_DELIVERY_WINDOW, {
+    method: 'POST',
+    body: JSON.stringify(windowData),
+  });
+};
+
 export default {
   startFulfillment,
   getFulfillmentStatus,
   updateFulfillmentStatus,
   markAsDelivered,
   cancelOrder,
+  setDeliveryWindow,
 };

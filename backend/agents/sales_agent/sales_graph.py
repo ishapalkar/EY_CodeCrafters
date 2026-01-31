@@ -920,8 +920,9 @@ async def call_fulfillment_worker(state: SalesAgentState) -> SalesAgentState:
             message = state.get("message", "")
             logger.info(f"📝 Searching for order ID in message: {message}")
             import re
-            # Look for patterns like ORD-xxx, ORD_xxx, or ORD000894 (must have digit or special char after ORD)
-            match = re.search(r'\b(ORD(?:[-_]?\d+[-\w]*|[-_]\w+))\b', message, re.IGNORECASE)
+            # Look for patterns like ORD000936, ORD-20260131, ORD_123, etc.
+            # Match ORD followed by digits/hyphens/underscores (at least 3 chars after ORD)
+            match = re.search(r'\b(ORD[-_]?\w{3,})\b', message, re.IGNORECASE)
             if match:
                 order_id = match.group(1).upper()
                 logger.info(f"✅ Found order ID via regex: {order_id}")
@@ -980,14 +981,30 @@ async def call_fulfillment_worker(state: SalesAgentState) -> SalesAgentState:
                 
                 status_msg = status_messages.get(status, f"Status: {status}")
                 
-                state["response"] = (
+                # Build the response message
+                response_msg = (
                     f"Order {order_id}:\n\n"
                     f"{status_msg}\n\n"
                     f"📍 Tracking ID: {tracking_id}\n"
                     f"🚛 Courier: {courier}\n"
-                    f"📅 ETA: {eta}\n\n"
-                    "Need help with anything else?"
+                    f"📅 ETA: {eta}"
                 )
+                
+                # Add delivery details if OUT_FOR_DELIVERY
+                if status == 'OUT_FOR_DELIVERY':
+                    delivery_boy = fulfillment.get('delivery_boy_name', '')
+                    delivery_phone = fulfillment.get('delivery_boy_phone', '')
+                    delivery_otp = fulfillment.get('delivery_otp', '')
+                    
+                    if delivery_boy:
+                        response_msg += f"\n\n👤 Delivery Partner: {delivery_boy}"
+                    if delivery_phone:
+                        response_msg += f"\n📱 Phone: {delivery_phone}"
+                    if delivery_otp:
+                        response_msg += f"\n🔐 OTP for Verification: {delivery_otp}"
+                
+                response_msg += "\n\nNeed help with anything else?"
+                state["response"] = response_msg
                 state["cards"] = []
                 logger.info(f"✅ Order status retrieved: {order_id} - {status}")
             else:
