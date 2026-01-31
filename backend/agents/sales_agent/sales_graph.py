@@ -88,6 +88,39 @@ WORKER_SERVICES = {
 # HELPER FUNCTIONS
 # ============================================================================
 
+def infer_gender_from_relation(relation: str) -> str:
+    """
+    Infer recipient gender from relationship.
+    
+    Args:
+        relation: Relationship string (e.g., 'mother', 'father', 'sister')
+        
+    Returns:
+        'male', 'female', or 'unisex'
+    """
+    relation_lower = relation.lower().strip()
+    
+    # Female relations
+    female_relations = {
+        'mother', 'mom', 'mama', 'mum', 'mummy', 'grandmother', 'grandma', 'grandmom',
+        'sister', 'sis', 'daughter', 'wife', 'girlfriend', 'gf', 'aunt', 'aunty',
+        'niece', 'cousin'  # cousin can be either, but often female in gifting context
+    }
+    
+    # Male relations
+    male_relations = {
+        'father', 'dad', 'papa', 'grandfather', 'grandpa', 'granddad',
+        'brother', 'bro', 'son', 'husband', 'boyfriend', 'bf', 'uncle',
+        'nephew'
+    }
+    
+    if relation_lower in female_relations:
+        return 'female'
+    elif relation_lower in male_relations:
+        return 'male'
+    else:
+        return 'unisex'
+
 def resolve_product_to_sku(product_identifier: str) -> Optional[str]:
     """
     Resolve product name or SKU to actual SKU.
@@ -588,8 +621,14 @@ async def call_recommendation_worker(state: SalesAgentState) -> SalesAgentState:
         if state["intent"] == "gifting" or state["entities"].get("occasion") in ["birthday", "gift", "anniversary"]:
             payload["mode"] = "gifting_genius"
             payload["recipient_relation"] = state["entities"].get("recipient_relation", "friend")
-            payload["recipient_gender"] = state["entities"].get("gender", "unisex")
+            
+            # Infer gender from relation if not explicitly provided
+            recipient_relation = state["entities"].get("recipient_relation", "")
+            explicit_gender = state["entities"].get("gender")
+            payload["recipient_gender"] = explicit_gender or infer_gender_from_relation(recipient_relation) or "unisex"
+            
             payload["occasion"] = state["entities"].get("occasion", "gift")
+            logger.info(f"🎁 Gifting mode: relation={recipient_relation}, inferred_gender={payload['recipient_gender']}, occasion={payload['occasion']}")
         elif state["intent"] == "trend":
             payload["mode"] = "trendseer"
         
