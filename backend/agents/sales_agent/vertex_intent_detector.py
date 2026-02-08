@@ -55,6 +55,7 @@ class IntentType(str, Enum):
     GIFTING = "gifting"
     COMPARISON = "comparison"
     TREND = "trend"
+    AMBIENT_COMMERCE = "ambient_commerce"
     SUPPORT = "support"
     FALLBACK = "fallback"
 
@@ -148,6 +149,7 @@ class VertexIntentDetector:
    - gifting: Buying a gift for someone
    - comparison: Comparing multiple products
    - trend: Asking about trends/popular items
+    - ambient_commerce: Visual search or image-based product discovery
    - loyalty: Asking about loyalty points, rewards, coupons, offers, discounts
    - social_validation: Asking what others buy/like, community insights, what's popular in their circle
    - support: Help with order/return/issue
@@ -178,7 +180,7 @@ class VertexIntentDetector:
 
 ### Response Format (valid JSON only):
 {{
-  "intent": "recommendation|inventory|payment|gifting|comparison|trend|loyalty|social_validation|support|fallback",
+    "intent": "recommendation|inventory|payment|gifting|comparison|trend|ambient_commerce|loyalty|social_validation|support|fallback",
   "confidence": 0.95,
   "entities": {{
     "category": "footwear",
@@ -407,6 +409,11 @@ Respond with ONLY the JSON object, no additional text."""
                         entities["product_name"] = match.group(1).strip()
                         break
         
+        # Visual search / ambient commerce intent
+        elif re.search(r"\b(visual search|search by image|search by photo|image search|photo search|upload image|upload photo|scan image|scan photo|camera search|find similar from image)\b", text):
+            intent = IntentType.AMBIENT_COMMERCE
+            confidence = 0.92
+
         # Order tracking / support (route to fulfillment)
         elif re.search(r"\b(where is my order|order status|track order|track my order|where is order)\b", text):
             intent = IntentType.SUPPORT
@@ -454,6 +461,21 @@ Respond with ONLY the JSON object, no additional text."""
                 matched_id = oid_match.group(1).upper()
                 entities["order_id"] = matched_id
                 logger.debug(f"Extracted order_id: {matched_id}")
+
+        # If still fallback but order ID is present, route to support
+        if intent == IntentType.FALLBACK:
+            oid_match = re.search(r"\b(ORD(?:[-_]?\d+[-\w]*|[-_]\w+))\b", user_message, re.IGNORECASE)
+            if oid_match:
+                matched_id = oid_match.group(1).upper()
+                entities["order_id"] = matched_id
+                intent = IntentType.SUPPORT
+                confidence = 0.8
+            else:
+                numeric_match = re.search(r"(?:order\s*id|orderid|order-id)\s*[:#-]?\s*(\d{3,})", text, re.IGNORECASE)
+                if numeric_match:
+                    entities["order_id"] = numeric_match.group(1)
+                    intent = IntentType.SUPPORT
+                    confidence = 0.75
         
         # Extract customer ID if present
         customer_match = re.search(r"(?:customer\s*id|memberid|id)\s*[:#]?\s*(\d{2,12})", text, re.IGNORECASE)

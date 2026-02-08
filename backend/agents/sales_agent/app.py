@@ -9,11 +9,12 @@ A production-ready sales agent that uses:
 """
 
 import logging
+import os
 import uuid
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, Request, status, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import requests
@@ -91,7 +92,11 @@ async def log_requests(request: Request, call_next):
     if request.method in ["POST", "PUT", "PATCH"]:
         try:
             body = await request.body()
-            logger.debug(f"Request body: {body.decode('utf-8')[:500]}")
+            content_type = request.headers.get("content-type", "")
+            if content_type.startswith("multipart/form-data"):
+                logger.debug("Request body: <multipart/form-data>")
+            else:
+                logger.debug(f"Request body: {body.decode('utf-8', errors='ignore')[:500]}")
             
             # Store body for route handler
             async def receive():
@@ -160,6 +165,39 @@ async def health_check():
         "service": "Sales Agent with LangGraph + Vertex AI",
         "timestamp": datetime.utcnow().isoformat()
     }
+
+
+@app.post("/api/visual-search")
+async def visual_search(image: UploadFile = File(...)):
+    """
+    Proxy visual search uploads to Ambient Commerce agent.
+    Expects a multipart form field named "image".
+    """
+    ambient_url = os.getenv("AMBIENT_COMMERCE_URL", "http://localhost:8007")
+
+    try:
+        image_bytes = await image.read()
+        files = {
+            "file": (image.filename, image_bytes, image.content_type or "application/octet-stream")
+        }
+
+        response = requests.post(
+            f"{ambient_url}/search/upload",
+            files=files,
+            timeout=60
+        )
+        response.raise_for_status()
+        return response.json()
+    except Exception as e:
+        logger.error(f"❌ Visual search failed: {e}")
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={
+                "success": False,
+                "message": "Visual search failed. Please try again.",
+                "error": str(e)
+            }
+        )
 
 
 class CheckoutRequest(BaseModel):

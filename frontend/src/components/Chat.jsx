@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Send, Check, CheckCheck, Phone, Video, Mic, MicOff, User, X, CreditCard, LifeBuoy, CheckCircle } from 'lucide-react';
+import { Send, Check, CheckCheck, Phone, Video, Mic, MicOff, User, X, CreditCard, LifeBuoy, CheckCircle, ImagePlus } from 'lucide-react';
 import { createRazorpayOrder, verifyRazorpayPayment, getNextOrderId } from '../services/paymentService';
 import { getTierInfo } from '../services/loyaltyService';
 import { setDeliveryWindow } from '../services/fulfillmentService';
@@ -148,12 +148,15 @@ const Chat = () => {
   const [lastTrackedOrderId, setLastTrackedOrderId] = useState(null);
   const [lastOrderStatus, setLastOrderStatus] = useState(null);
   const [wsConnected, setWsConnected] = useState(false);
+  const [isImageSearching, setIsImageSearching] = useState(false);
   const messagesEndRef = useRef(null);
   const recognitionRef = useRef(null);
   const transcriptRef = useRef('');
   const paymentInFlightRef = useRef(false);
   const statusPollingRef = useRef(null);
   const websocketRef = useRef(null);
+  const reconnectTimeoutRef = useRef(null);
+  const imageInputRef = useRef(null);
 
   const supportActions = [
     { key: 'return', label: 'Start Return', caption: 'Schedule pickup and refund', emoji: '📦' },
@@ -173,6 +176,93 @@ const Chat = () => {
       });
     }
   }, []);
+
+  useEffect(() => {
+    if (!sessionToken) {
+      return undefined;
+    }
+
+    const baseUrl = API_ENDPOINTS.FULFILLMENT;
+    const wsUrl = `${baseUrl.replace(/^http/, 'ws')}/ws/fulfillment`;
+
+    const connectWebSocket = () => {
+      if (websocketRef.current) {
+        websocketRef.current.close();
+      }
+
+      const socket = new WebSocket(wsUrl);
+      websocketRef.current = socket;
+
+      socket.onopen = () => {
+        setWsConnected(true);
+      };
+
+      socket.onmessage = (event) => {
+        try {
+          const payload = JSON.parse(event.data);
+          if (payload?.type !== 'delivery_update') {
+            return;
+          }
+
+          const orderId = payload.order_id;
+          const fulfillment = payload.fulfillment || {};
+          const status = fulfillment.current_status || 'UNKNOWN';
+
+          const statusMessages = {
+            PROCESSING: '📦 Your order is being processed and packed.',
+            PACKED: '✅ Your order has been packed and is ready for shipment.',
+            SHIPPED: '🚚 Your order has been shipped!',
+            OUT_FOR_DELIVERY: '🏃 Your order is out for delivery!',
+            DELIVERED: '🎉 Your order has been delivered!',
+          };
+
+          let responseText = `Order ${orderId}:\n\n${statusMessages[status] || `Status: ${status}`}`;
+
+          if (status === 'OUT_FOR_DELIVERY') {
+            if (fulfillment.delivery_boy_name) {
+              responseText += `\n\n👤 Delivery Partner: ${fulfillment.delivery_boy_name}`;
+            }
+            if (fulfillment.delivery_boy_phone) {
+              responseText += `\n📱 Phone: ${fulfillment.delivery_boy_phone}`;
+            }
+            if (fulfillment.delivery_otp) {
+              responseText += `\n🔐 OTP for Verification: ${fulfillment.delivery_otp}`;
+            }
+          }
+
+          appendAgentMessage(responseText);
+          setLastTrackedOrderId(orderId);
+          setLastOrderStatus(status);
+        } catch (error) {
+          console.error('Failed to parse fulfillment websocket message:', error);
+        }
+      };
+
+      socket.onerror = (error) => {
+        console.error('Fulfillment websocket error:', error);
+      };
+
+      socket.onclose = () => {
+        setWsConnected(false);
+        if (reconnectTimeoutRef.current) {
+          clearTimeout(reconnectTimeoutRef.current);
+        }
+        reconnectTimeoutRef.current = setTimeout(connectWebSocket, 3000);
+      };
+    };
+
+    connectWebSocket();
+
+    return () => {
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      if (websocketRef.current) {
+        websocketRef.current.close();
+        websocketRef.current = null;
+      }
+    };
+  }, [sessionToken]);
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
@@ -197,6 +287,16 @@ const Chat = () => {
   const normalizeQuotes = (text) => {
     if (!text) return '';
     return String(text).replace(/^\s*["'“”]+|["'“”]+\s*$/g, '').trim();
+  };
+
+  const renderMessageText = (text) => {
+    if (!text) return null;
+    const parts = String(text).split(/\*\*(.*?)\*\*/g);
+    return parts.map((part, index) => (
+      index % 2 === 1
+        ? <strong key={`bold-${index}`} className="font-semibold">{part}</strong>
+        : <span key={`text-${index}`}>{part}</span>
+    ));
   };
 
   // Loyalty Management
@@ -1404,6 +1504,90 @@ const Chat = () => {
     await sendMessageToAgent(messageText);
   };
 
+  const handleImageUploadClick = () => {
+    if (imageInputRef.current) {
+      imageInputRef.current.value = '';
+      imageInputRef.current.click();
+    }
+  };
+
+  const handleImageUpload = async (event) => {
+    const file = event.target.files?.[0];
+    if (!file || isImageSearching) {
+      return;
+    }
+
+    setIsImageSearching(true);
+
+    const uploadPreviewUrl = URL.createObjectURL(file);
+    setMessages((prev) => [
+      ...prev,
+      {
+        id: Date.now() + Math.random(),
+        text: '📸 Uploaded an image for visual search.',
+        sender: 'user',
+        timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+        status: 'read',
+        imagePreview: uploadPreviewUrl,
+      },
+    ]);
+
+    await appendAgentMessage('📸 Got your image! Searching for visually similar products...');
+
+    try {
+      const response = await salesAgentService.visualSearch(file);
+
+      if (!response || response.success === false) {
+        await appendAgentMessage(response?.message || 'I could not find similar products. Please try another image.');
+        return;
+      }
+
+      const bestMatch = response.best_match;
+      const alternatives = response.alternative_matches || [];
+      const cards = [];
+      const gallery = [];
+
+      if (bestMatch) {
+        cards.push({
+          type: 'product',
+          sku: bestMatch.matched_product_id,
+          name: bestMatch.product_name,
+          price: bestMatch.price,
+          image: bestMatch.image_url || '',
+          description: bestMatch.reasoning || '',
+        });
+        if (bestMatch.image_url) {
+          gallery.push(bestMatch.image_url);
+        }
+      }
+
+      alternatives.forEach((match) => {
+        cards.push({
+          type: 'product',
+          sku: match.matched_product_id,
+          name: match.product_name,
+          price: match.price,
+          image: match.image_url || '',
+          description: match.reasoning || '',
+        });
+        if (match.image_url) {
+          gallery.push(match.image_url);
+        }
+      });
+
+      const intro = bestMatch
+        ? `Here’s the closest visual match I found: ${bestMatch.brand || ''} ${bestMatch.product_name || ''}.`
+        : 'Here are the closest matches I found from your image.';
+
+      await appendAgentMessage(intro, { metadata: { cards }, messageProps: { cards, imageGallery: gallery } });
+    } catch (error) {
+      console.error('Visual search failed:', error);
+      await appendAgentMessage('Something went wrong while searching by image. Please try again.');
+    } finally {
+      setIsImageSearching(false);
+    }
+  };
+
   const handleCheckoutPayment = (checkout) => {
     if (!checkout) {
       return;
@@ -1775,8 +1959,8 @@ const Chat = () => {
             >
               <div className="text-sm leading-relaxed whitespace-pre-wrap break-words">
                 {message.text && message.text.length > 800 && !expandedMessages.has(message.id)
-                  ? `${message.text.slice(0, 380)}... `
-                  : message.text}
+                  ? renderMessageText(`${message.text.slice(0, 380)}... `)
+                  : renderMessageText(message.text)}
                 {message.text && message.text.length > 800 && (
                   <button
                     onClick={() => toggleExpandMessage(message.id)}
@@ -1786,6 +1970,29 @@ const Chat = () => {
                   </button>
                 )}
               </div>
+
+              {message.imagePreview && (
+                <div className="mt-3">
+                  <img
+                    src={message.imagePreview}
+                    alt="Uploaded preview"
+                    className="w-40 h-40 object-cover rounded-lg border border-gray-200"
+                  />
+                </div>
+              )}
+
+              {message.imageGallery?.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {message.imageGallery.map((url, index) => (
+                    <img
+                      key={`${url}-${index}`}
+                      src={url}
+                      alt="Suggested product"
+                      className="w-20 h-20 object-cover rounded-lg border border-gray-200"
+                    />
+                  ))}
+                </div>
+              )}
               
               {/* Product Cards */}
               {message.cards && message.cards.length > 0 && (
@@ -1814,8 +2021,8 @@ const Chat = () => {
                               {card.personalized_reason && (
                                 <div className="mb-2">
                                   {card.personalized_reason.length > 240 && !expandedCards.has(`${message.id}-${idx}-pr`)
-                                    ? `${card.personalized_reason.slice(0, 220)}... `
-                                    : card.personalized_reason}
+                                    ? renderMessageText(`${card.personalized_reason.slice(0, 220)}... `)
+                                    : renderMessageText(card.personalized_reason)}
                                   {card.personalized_reason.length > 240 && (
                                     <button
                                       onClick={() => toggleExpandCard(`${message.id}-${idx}-pr`)}
@@ -1858,8 +2065,8 @@ const Chat = () => {
                               {(!card.personalized_reason && !card.gift_message && card.description) && (
                                 <>
                                   {card.description.length > 240 && !expandedCards.has(`${message.id}-${idx}`)
-                                    ? `${card.description.slice(0, 220)}... `
-                                    : card.description}
+                                    ? renderMessageText(`${card.description.slice(0, 220)}... `)
+                                    : renderMessageText(card.description)}
                                   {card.description.length > 240 && (
                                     <button
                                       onClick={() => toggleExpandCard(`${message.id}-${idx}`)}
@@ -2032,6 +2239,15 @@ const Chat = () => {
                 <path d="M9.153 11.603c.795 0 1.439-.879 1.439-1.962s-.644-1.962-1.439-1.962-1.439.879-1.439 1.962.644 1.962 1.439 1.962zm-3.204 1.362c-.026-.307-.131 5.218 6.063 5.551 6.066-.25 6.066-5.551 6.066-5.551-6.078 1.416-12.129 0-12.129 0zm11.363 1.108s-.669 1.959-5.051 1.959c-3.505 0-5.388-1.164-5.607-1.959 0 0 5.912 1.055 10.658 0zM11.804 1.011C5.609 1.011.978 6.033.978 12.228s4.826 10.761 11.021 10.761S23.02 18.423 23.02 12.228c.001-6.195-5.021-11.217-11.216-11.217zM12 21.354c-5.273 0-9.381-3.886-9.381-9.159s3.942-9.548 9.215-9.548 9.548 4.275 9.548 9.548c-.001 5.272-4.109 9.159-9.382 9.159zm3.108-9.751c.795 0 1.439-.879 1.439-1.962s-.644-1.962-1.439-1.962-1.439.879-1.439 1.962.644 1.962 1.439 1.962z"/>
               </svg>
             </button>
+            <button
+              type="button"
+              onClick={handleImageUploadClick}
+              disabled={isImageSearching}
+              className={`transition-colors ${isImageSearching ? 'text-gray-300 cursor-not-allowed' : 'text-gray-500 hover:text-gray-700'}`}
+              title={isImageSearching ? 'Searching by image...' : 'Upload image for visual search'}
+            >
+              <ImagePlus className="w-6 h-6" />
+            </button>
             <input
               type="text"
               value={inputText}
@@ -2072,6 +2288,13 @@ const Chat = () => {
             <Send className="w-5 h-5" />
           </button>
         </div>
+        <input
+          ref={imageInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={handleImageUpload}
+        />
       </div>
 
       {showAddressModal && (

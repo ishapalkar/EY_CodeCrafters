@@ -81,6 +81,7 @@ WORKER_SERVICES = {
     "post_purchase": "http://localhost:8005",
     "stylist": "http://localhost:8006",
     "virtual_circles": "http://localhost:8009",  # Virtual Circles (Community Chat)
+    "ambient_commerce": os.getenv("AMBIENT_COMMERCE_URL", "http://localhost:8007"),
 }
 
 WORKER_TIMEOUT_SECONDS = int(os.getenv("SALES_AGENT_WORKER_TIMEOUT", "25"))
@@ -544,6 +545,7 @@ def route_by_intent(state: SalesAgentState) -> Literal[
     "fulfillment_worker",
     "post_purchase_worker",
     "stylist_worker",
+    "ambient_commerce_worker",
     "comparison_worker",
     "trend_worker",
     "support_worker",
@@ -571,6 +573,7 @@ def route_by_intent(state: SalesAgentState) -> Literal[
         "loyalty": "loyalty_worker",  # Loyalty points and coupons
         "comparison": "recommendation_worker",  # Comparison uses recommendation
         "trend": "recommendation_worker",  # Trends use recommendation
+        "ambient_commerce": "ambient_commerce_worker",
         # Route order tracking and support to fulfillment (not post-purchase)
         "support": "fulfillment_worker",
         "social_validation": "virtual_circles_worker",  # Community chat & insights
@@ -744,6 +747,99 @@ async def call_inventory_worker(state: SalesAgentState) -> SalesAgentState:
         state["error"] = str(e)
         state["cards"] = []
     
+    return state
+
+
+async def call_ambient_commerce_worker(state: SalesAgentState) -> SalesAgentState:
+    """Call ambient commerce (visual search) microservice."""
+    logger.info("📞 Calling Ambient Commerce Worker...")
+
+    state["worker_service"] = "ambient_commerce"
+    state["worker_url"] = WORKER_SERVICES["ambient_commerce"]
+
+    try:
+        metadata = state.get("metadata", {})
+        image_path = metadata.get("image_path")
+        image_url = metadata.get("image_url")
+
+        if not image_path and not image_url:
+            state["response"] = (
+                "To run visual search, please upload an image in the visual search flow. "
+                "Once uploaded, I can find similar products for you."
+            )
+            state["cards"] = []
+            return state
+
+        file_bytes = None
+        filename = "query.jpg"
+
+        if image_path:
+            image_file = Path(image_path)
+            if not image_file.exists():
+                state["response"] = "I couldn't find that image locally. Please upload it again."
+                state["cards"] = []
+                return state
+            filename = image_file.name
+            file_bytes = image_file.read_bytes()
+        else:
+            response = requests.get(image_url, timeout=10)
+            response.raise_for_status()
+            file_bytes = response.content
+
+        files = {
+            "file": (filename, file_bytes, "application/octet-stream")
+        }
+
+        response = requests.post(
+            f"{state['worker_url']}/search/upload",
+            files=files,
+            timeout=WORKER_TIMEOUT_SECONDS
+        )
+        response.raise_for_status()
+        data = response.json()
+
+        if not data.get("success"):
+            state["response"] = data.get("message", "I couldn't find a close visual match.")
+            state["cards"] = []
+            return state
+
+        best_match = data.get("best_match")
+        alternatives = data.get("alternative_matches", [])
+
+        if best_match:
+            state["response"] = f"I found a strong visual match: {best_match.get('brand', '')} {best_match.get('product_name', '')}."
+        else:
+            state["response"] = "I found some similar options based on your image."
+
+        cards = []
+        if best_match:
+            cards.append({
+                "type": "product",
+                "sku": best_match.get("matched_product_id"),
+                "name": best_match.get("product_name"),
+                "price": best_match.get("price"),
+                "image": best_match.get("image_url", ""),
+                "description": best_match.get("reasoning", ""),
+            })
+
+        for match in alternatives:
+            cards.append({
+                "type": "product",
+                "sku": match.get("matched_product_id"),
+                "name": match.get("product_name"),
+                "price": match.get("price"),
+                "image": match.get("image_url", ""),
+                "description": match.get("reasoning", ""),
+            })
+
+        state["cards"] = cards
+
+    except Exception as e:
+        logger.error(f"❌ Ambient commerce worker failed: {e}")
+        state["response"] = "I'm having trouble running visual search right now. Please try again."
+        state["error"] = str(e)
+        state["cards"] = []
+
     return state
 
 
@@ -1207,6 +1303,7 @@ def create_sales_agent_graph() -> StateGraph:
     workflow.add_node("payment_worker", call_payment_worker)
     workflow.add_node("loyalty_worker", call_loyalty_worker)
     workflow.add_node("fulfillment_worker", call_fulfillment_worker)
+    workflow.add_node("ambient_commerce_worker", call_ambient_commerce_worker)
     workflow.add_node("virtual_circles_worker", call_virtual_circles_worker)
     workflow.add_node("fallback_worker", call_fallback_worker)
     
@@ -1227,6 +1324,7 @@ def create_sales_agent_graph() -> StateGraph:
             "gifting_worker": "recommendation_worker",
             "support_worker": "fulfillment_worker",
             "fulfillment_worker": "fulfillment_worker",
+            "ambient_commerce_worker": "ambient_commerce_worker",
             "virtual_circles_worker": "virtual_circles_worker",
             "fallback_worker": "fallback_worker",
         }
@@ -1238,6 +1336,7 @@ def create_sales_agent_graph() -> StateGraph:
     workflow.add_edge("payment_worker", END)
     workflow.add_edge("loyalty_worker", END)
     workflow.add_edge("fulfillment_worker", END)
+    workflow.add_edge("ambient_commerce_worker", END)
     workflow.add_edge("virtual_circles_worker", END)
     workflow.add_edge("fallback_worker", END)
     

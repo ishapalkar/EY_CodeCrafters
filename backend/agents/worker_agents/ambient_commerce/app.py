@@ -14,6 +14,7 @@ import tempfile
 import shutil
 from pathlib import Path
 from datetime import datetime
+import requests
 
 from feature_extractor import FeatureExtractor
 from index_builder import FAISSIndexBuilder
@@ -163,47 +164,92 @@ def generate_reasoning(match: Dict, all_matches: List[Dict], similarity_threshol
     product = match['product_name']
     color = match['color']
     
+    groq_api_key = os.getenv("GROQ_API_KEY")
+    groq_model = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
+    tone_variants = [
+        "premium",
+        "everyday",
+        "value",
+        "minimal",
+    ]
+    tone_hint = tone_variants[hash(product) % len(tone_variants)] if product else "everyday"
+
+    if groq_api_key:
+        try:
+            prompt = (
+                "You are a retail stylist. Write 3-4 persuasive sentences to help a customer buy this item. "
+                "Rules: include the similarity score as a percentage; do NOT mention low match or showing multiple options; "
+                "use **bold** for 2-3 key phrases (brand, product, material or color); keep it convincing and concise.\n\n"
+                f"Product: {brand} {product}\n"
+                f"Color: {color}\n"
+                f"Material: {match.get('material', 'Unknown')}\n"
+                f"Subcategory: {match.get('subcategory', 'Unknown')}\n"
+                f"Price: {match.get('price', 'Unknown')}\n"
+                f"Similarity score: {score:.2%}\n"
+                f"Tone: {tone_hint}"
+            )
+
+            response = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {groq_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": groq_model,
+                    "messages": [
+                        {"role": "system", "content": "You are a helpful retail copywriter."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "temperature": 0.7,
+                    "max_tokens": 120,
+                },
+                timeout=15,
+            )
+            response.raise_for_status()
+            data = response.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            if content:
+                return content.strip()
+        except Exception:
+            pass
+
     reasoning_parts = []
-    
-    # Confidence level
-    if score >= 0.95:
-        reasoning_parts.append(f"**Excellent match** (similarity: {score:.2%})")
-    elif score >= 0.85:
-        reasoning_parts.append(f"**Strong match** (similarity: {score:.2%})")
-    elif score >= 0.75:
-        reasoning_parts.append(f"**Good match** (similarity: {score:.2%})")
-    else:
-        reasoning_parts.append(f"**Moderate match** (similarity: {score:.2%})")
-    
+
+    # Similarity highlight
+    reasoning_parts.append(f"**Similarity score:** {score:.2%}.")
+
     # Match description
-    reasoning_parts.append(f"The uploaded image closely resembles the **{brand} {product}** in **{color}**.")
-    
-    # Multiple matches info
-    if len(all_matches) > 1 and score < similarity_threshold:
-        reasoning_parts.append(
-            f"Since the similarity score is below {similarity_threshold:.0%}, "
-            f"I'm showing {len(all_matches)} similar options for you to choose from."
-        )
-    
-    # Brand preference
-    same_brand_matches = [m for m in all_matches if m['brand'] == brand]
-    if len(same_brand_matches) > 1:
-        reasoning_parts.append(
-            f"Found {len(same_brand_matches)} similar items from **{brand}**."
-        )
-    
-    # Visual features
+    core_line = f"Visually closest to the **{brand} {product}** in **{color}**."
+    reasoning_parts.append(core_line)
+
+    # Visual features with personalization
     visual_cues = []
     if 'subcategory' in match:
         visual_cues.append(f"**{match['subcategory']}** style")
     if color != "Unknown":
-        visual_cues.append(f"**{color}** color")
+        visual_cues.append(f"**{color}** shade")
     if match.get('material') and match['material'] != "Unknown":
         visual_cues.append(f"**{match['material']}** material")
-    
+
     if visual_cues:
-        reasoning_parts.append(f"Key features detected: {', '.join(visual_cues)}.")
-    
+        reasoning_parts.append(
+            f"If you prefer {', '.join(visual_cues)}, this option will feel right instantly."
+        )
+
+    if brand and brand != "Unknown":
+        reasoning_parts.append(f"A solid pick if **{brand}** is already on your list.")
+
+    # Persuasive, varied close per option
+    closing_hooks = [
+        "Easy to style and ready for everyday use.",
+        "A clean, versatile choice that elevates your look.",
+        "Feels premium in hand—worth adding to cart today.",
+        "Great value for the quality and finish.",
+    ]
+    hook = closing_hooks[hash(product) % len(closing_hooks)] if product else closing_hooks[0]
+    reasoning_parts.append(hook)
+
     return " ".join(reasoning_parts)
 
 
