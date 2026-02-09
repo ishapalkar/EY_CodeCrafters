@@ -12,9 +12,18 @@ export const useCart = () => {
 
 export const CartProvider = ({ children }) => {
   const [cartItems, setCartItems] = useState(() => {
-    // Load cart from localStorage on init
     const saved = localStorage.getItem('ey_cart');
-    return saved ? JSON.parse(saved) : [];
+    const parsed = saved ? JSON.parse(saved) : [];
+    return Array.isArray(parsed)
+      ? parsed.map((item) => ({
+          ...item,
+          reservationStatus: item.reservationStatus || 'idle',
+          reservationHoldId: item.reservationHoldId ?? null,
+          reservationExpiresAt: item.reservationExpiresAt ?? null,
+          reservationLocation: item.reservationLocation ?? null,
+          reservedQuantity: item.reservedQuantity ?? 0,
+        }))
+      : [];
   });
 
   // Persist cart to localStorage whenever it changes
@@ -32,7 +41,18 @@ export const CartProvider = ({ children }) => {
         );
       }
       // Add new item with qty
-      return [...prev, { ...item, qty: item.qty || 1 }];
+      return [
+        ...prev,
+        {
+          ...item,
+          qty: item.qty || 1,
+          reservationStatus: 'idle',
+          reservationHoldId: null,
+          reservationExpiresAt: null,
+          reservationLocation: null,
+          reservedQuantity: 0,
+        },
+      ];
     });
   };
 
@@ -46,7 +66,22 @@ export const CartProvider = ({ children }) => {
       return;
     }
     setCartItems((prev) =>
-      prev.map((i) => (i.sku === sku ? { ...i, qty } : i))
+      prev.map((i) =>
+        i.sku === sku
+          ? {
+              ...i,
+              qty,
+              reservedQuantity:
+                i.reservedQuantity && i.reservedQuantity > qty ? qty : i.reservedQuantity,
+            }
+          : i
+      )
+    );
+  };
+
+  const updateItemMetadata = (sku, updates) => {
+    setCartItems((prev) =>
+      prev.map((item) => (item.sku === sku ? { ...item, ...updates } : item))
     );
   };
 
@@ -75,6 +110,7 @@ export const CartProvider = ({ children }) => {
         clearCart,
         getCartTotal,
         getCartCount,
+        updateItemMetadata,
       }}
     >
       {children}

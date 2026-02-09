@@ -29,6 +29,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.get('/health')
+async def health():
+    """Health endpoint for Data API."""
+    try:
+        # quick read to ensure data directory exists
+        ok = (DATA_DIR.exists())
+        return JSONResponse(status_code=200, content={"status": "healthy", "data_dir": str(DATA_DIR) if ok else None})
+    except Exception as e:
+        return JSONResponse(status_code=500, content={"status": "unhealthy", "error": str(e)})
+
+
+@app.exception_handler(Exception)
+async def handle_exceptions(request, exc):
+    return JSONResponse(status_code=500, content={"status": "error", "message": "Internal server error"})
+
 # Data directory
 DATA_DIR = Path(__file__).parent / "data"
 

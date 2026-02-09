@@ -1,10 +1,23 @@
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCart } from '@/contexts/CartContext.jsx';
 import { ShoppingCart, Trash2, Plus, Minus, ArrowLeft } from 'lucide-react';
+import inventoryService from '@/services/inventoryService';
 
 const CartPage = () => {
   const navigate = useNavigate();
-  const { cartItems, removeFromCart, updateQuantity, getCartTotal, getCartCount } = useCart();
+  const {
+    cartItems,
+    removeFromCart,
+    updateQuantity,
+    getCartTotal,
+    getCartCount,
+    updateItemMetadata,
+  } = useCart();
+  const [reserveLoading, setReserveLoading] = useState({});
+  const [reserveFeedback, setReserveFeedback] = useState({});
+  const [storeOptions, setStoreOptions] = useState({});
+  const [selectedStore, setSelectedStore] = useState({});
 
   const formatINR = (amount) => {
     return amount.toLocaleString('en-IN', {
@@ -14,9 +27,198 @@ const CartPage = () => {
     });
   };
 
+  const resetReservationMetadata = (sku) => {
+    updateItemMetadata(sku, {
+      reservationStatus: 'idle',
+      reservationHoldId: null,
+      reservationExpiresAt: null,
+      reservationLocation: null,
+      reservedQuantity: 0,
+    });
+  };
+
+  const handleReleaseReservation = async (item) => {
+    if (!item.reservationHoldId) {
+      resetReservationMetadata(item.sku);
+      return;
+    }
+
+    try {
+      await inventoryService.releaseInventory(item.reservationHoldId);
+      setReserveFeedback((prev) => ({
+        ...prev,
+        [item.sku]: 'Reservation released',
+      }));
+    } catch (error) {
+      console.error('Failed to release reservation:', error);
+      setReserveFeedback((prev) => ({
+        ...prev,
+        [item.sku]: 'Could not release reservation. Please try again.',
+      }));
+    } finally {
+      resetReservationMetadata(item.sku);
+    }
+  };
+
+  const handleReserveInStore = async (item) => {
+    if (!item || item.qty <= 0) return;
+
+    setReserveLoading((prev) => ({ ...prev, [item.sku]: true }));
+    // Decide best location to reserve from: prefer user-selected store, else seeded STORE_MUMBAI, else find matching store
+    let location = 'store:STORE_MUMBAI';
+    try {
+      const inventorySnapshot = await inventoryService.getInventory(item.sku);
+      // Find a store with enough stock
+      const stores = inventorySnapshot.store_stock || {};
+      const userSelected = selectedStore[item.sku];
+      if (userSelected) {
+        location = userSelected === 'online' ? 'online' : `store:${userSelected}`;
+      } else {
+        const matchingStore = Object.keys(stores).find((s) => stores[s] >= item.qty);
+        if (matchingStore) {
+          location = `store:${matchingStore}`;
+        } else if ((inventorySnapshot.online_stock || 0) >= item.qty) {
+          location = 'online';
+        }
+      }
+
+      // If no suitable store/online stock, we'll still attempt and let server respond with 409
+      if (item.reservationHoldId) {
+        await inventoryService.releaseInventory(item.reservationHoldId);
+      }
+
+      
+      const response = await inventoryService.holdInventory({
+        sku: item.sku,
+        quantity: item.qty,
+        location,
+        ttl: 1800,
+      });
+
+      updateItemMetadata(item.sku, {
+        reservationStatus: 'reserved',
+        reservationHoldId: response.hold_id,
+        reservationExpiresAt: response.expires_at,
+        reservationLocation: location,
+        reservedQuantity: item.qty,
+      });
+
+      setReserveFeedback((prev) => ({
+        ...prev,
+        [item.sku]: 'Your product is reserved in store.',
+      }));
+    } catch (error) {
+      console.error('Reservation failed:', error);
+
+      // If server responded with 409, fetch inventory levels and show helpful guidance
+      if (error && error.status === 409) {
+        try {
+          const inventory = await inventoryService.getInventory(item.sku);
+          const stores = inventory.store_stock || {};
+          const storeEntries = Object.entries(stores)
+            .filter(([, qty]) => qty > 0)
+            .sort((a, b) => b[1] - a[1]);
+
+          let suggestion;
+          if (storeEntries.length > 0) {
+            // show top 2 stores with availability
+            const top = storeEntries.slice(0, 2).map(([s, q]) => `${s} (${q})`).join(', ');
+            suggestion = `Not enough stock at the selected location. Available at: ${top}.`;
+          } else if ((inventory.online_stock || 0) > 0) {
+            suggestion = `No stock in stores for this SKU. ${inventory.online_stock} available online.`;
+          } else {
+            suggestion = 'Product is out of stock.';
+          }
+
+          setReserveFeedback((prev) => ({
+            ...prev,
+            [item.sku]: suggestion,
+          }));
+        } catch (e) {
+          setReserveFeedback((prev) => ({
+            ...prev,
+            [item.sku]: 'Unable to reserve product. Please try again.',
+          }));
+        }
+      } else {
+        setReserveFeedback((prev) => ({
+          ...prev,
+          [item.sku]: error.message || 'Unable to reserve product. Please try again.',
+        }));
+      }
+
+      resetReservationMetadata(item.sku);
+    } finally {
+      setReserveLoading((prev) => ({ ...prev, [item.sku]: false }));
+    }
+  };
+
+  const handleQuantityChange = async (item, newQty) => {
+    if (newQty <= 0) {
+      await handleRemove(item);
+      return;
+    }
+
+    if (item.reservationHoldId) {
+      await handleReleaseReservation(item);
+    }
+
+    updateQuantity(item.sku, newQty);
+  };
+
+  // Fetch store options for cart items so users can pick a store to reserve from
+  useEffect(() => {
+    let mounted = true;
+    const fetchOptions = async () => {
+      const skus = cartItems.map((c) => c.sku);
+      const nextOptions = {};
+      const nextSelected = {};
+
+      await Promise.all(
+        skus.map(async (sku) => {
+          try {
+            const inv = await inventoryService.getInventory(sku);
+            const stores = inv.store_stock ? Object.keys(inv.store_stock) : [];
+            nextOptions[sku] = stores;
+            // prefer seeded STORE_MUMBAI if present, else first store, else 'online'
+            if (stores.includes('STORE_MUMBAI')) nextSelected[sku] = 'STORE_MUMBAI';
+            else if (stores.length > 0) nextSelected[sku] = stores[0];
+            else nextSelected[sku] = inv.online_stock > 0 ? 'online' : 'STORE_MUMBAI';
+          } catch (e) {
+            // ignore per-sku failures
+          }
+        })
+      );
+
+      if (!mounted) return;
+      setStoreOptions((prev) => ({ ...prev, ...nextOptions }));
+      setSelectedStore((prev) => ({ ...prev, ...nextSelected }));
+    };
+
+    if (cartItems.length > 0) fetchOptions();
+    return () => {
+      mounted = false;
+    };
+  }, [cartItems]);
+
+  const handleRemove = async (item) => {
+    if (item.reservationHoldId) {
+      await handleReleaseReservation(item);
+    }
+    removeFromCart(item.sku);
+  };
+
   const handleCheckout = () => {
     if (cartItems.length === 0) return;
     navigate('/checkout');
+  };
+
+  const isReservationFresh = (item) => {
+    return (
+      item.reservationStatus === 'reserved' &&
+      item.reservationHoldId &&
+      item.reservedQuantity === item.qty
+    );
   };
 
   return (
@@ -89,14 +291,14 @@ const CartPage = () => {
                     <div className="flex items-center gap-4 mt-4">
                       <div className="flex items-center gap-2 border border-gray-300 rounded-lg">
                         <button
-                          onClick={() => updateQuantity(item.sku, item.qty - 1)}
+                          onClick={() => handleQuantityChange(item, item.qty - 1)}
                           className="p-2 hover:bg-gray-100 transition-colors rounded-l-lg"
                         >
                           <Minus className="w-4 h-4" />
                         </button>
                         <span className="px-4 font-semibold">{item.qty}</span>
                         <button
-                          onClick={() => updateQuantity(item.sku, item.qty + 1)}
+                          onClick={() => handleQuantityChange(item, item.qty + 1)}
                           className="p-2 hover:bg-gray-100 transition-colors rounded-r-lg"
                         >
                           <Plus className="w-4 h-4" />
@@ -104,11 +306,60 @@ const CartPage = () => {
                       </div>
 
                       <button
-                        onClick={() => removeFromCart(item.sku)}
+                        onClick={() => handleRemove(item)}
                         className="text-red-600 hover:text-red-700 p-2 rounded-lg hover:bg-red-50 transition-colors"
                       >
                         <Trash2 className="w-5 h-5" />
                       </button>
+                    </div>
+
+                    <div className="mt-4 space-y-2">
+                        {/* Store selector for reservation */}
+                        <div className="flex items-center gap-2">
+                          {storeOptions[item.sku] && storeOptions[item.sku].length > 0 ? (
+                            <select
+                              value={selectedStore[item.sku] || ''}
+                              onChange={(e) =>
+                                setSelectedStore((prev) => ({ ...prev, [item.sku]: e.target.value }))
+                              }
+                              className="border px-3 py-2 rounded-md text-sm"
+                            >
+                              {storeOptions[item.sku].map((s) => (
+                                <option key={s} value={s}>
+                                  {s}
+                                </option>
+                              ))}
+                              <option value="online">Online</option>
+                            </select>
+                          ) : (
+                            <span className="text-sm text-gray-500">Select store at reserve</span>
+                          )}
+                        </div>
+                      <button
+                        onClick={() => handleReserveInStore(item)}
+                        disabled={reserveLoading[item.sku] || isReservationFresh(item)}
+                        className={`px-4 py-2 rounded-lg font-semibold transition-colors ${
+                          isReservationFresh(item)
+                            ? 'bg-green-100 text-green-700 cursor-default'
+                            : 'bg-blue-600 text-white hover:bg-blue-700'
+                        } ${reserveLoading[item.sku] ? 'opacity-70 cursor-wait' : ''}`}
+                      >
+                        {isReservationFresh(item)
+                          ? 'Reserved in Store'
+                          : reserveLoading[item.sku]
+                          ? 'Reserving...'
+                          : 'Reserve in Store'}
+                      </button>
+
+                      {reserveFeedback[item.sku] && (
+                        <p className="text-sm text-gray-600">{reserveFeedback[item.sku]}</p>
+                      )}
+
+                      {item.reservationStatus === 'reserved' && !isReservationFresh(item) && (
+                        <p className="text-sm text-orange-600">
+                          Reservation covers {item.reservedQuantity} item(s). Update reservation to match current quantity.
+                        </p>
+                      )}
                     </div>
                   </div>
 
