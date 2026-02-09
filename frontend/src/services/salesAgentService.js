@@ -227,6 +227,8 @@ export const salesAgentService = {
       };
     }
   },
+  
+  /**
    * Step 7: Get seasonal trends
    * Based on: "System proactively highlights current seasonal trends"
    */

@@ -5,6 +5,7 @@ Endpoints for products, customers, orders, stores, inventory
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 import pandas as pd
 import json
 from pathlib import Path
@@ -28,11 +29,26 @@ app.add_middleware(
 # Data directory
 DATA_DIR = Path(__file__).parent / "data"
 
+# Mount static files for images and other assets
+if (DATA_DIR / "product_images").exists():
+    app.mount("/images", StaticFiles(directory=str(DATA_DIR / "product_images")), name="images")
+
 # Load CSV files
 def load_csv(filename):
     """Load CSV file and return as list of dictionaries"""
     try:
         df = pd.read_csv(DATA_DIR / filename)
+        
+        # Normalize products CSV column names to match code expectations
+        if filename == "products.csv":
+            rename_map = {}
+            if "product_display_name" in df.columns and "ProductDisplayName" not in df.columns:
+                rename_map["product_display_name"] = "ProductDisplayName"
+            if "sub_category" in df.columns and "subcategory" not in df.columns:
+                rename_map["sub_category"] = "subcategory"
+            if rename_map:
+                df = df.rename(columns=rename_map)
+        
         return df.to_dict('records')
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error loading {filename}: {str(e)}")
@@ -56,7 +72,7 @@ async def root():
 
 @app.get("/products")
 async def get_products(
-    limit: int = Query(default=20, le=100),
+    limit: int = Query(default=20, le=5000),
     category: str = None,
     brand: str = None,
     min_price: float = None,
