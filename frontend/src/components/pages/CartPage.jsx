@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useCart } from '@/contexts/CartContext.jsx';
 import { ShoppingCart, Trash2, Plus, Minus, ArrowLeft } from 'lucide-react';
 import inventoryService from '@/services/inventoryService';
+import Navbar from '@/components/Navbar.jsx';
 
 const CartPage = () => {
   const navigate = useNavigate();
@@ -20,7 +21,8 @@ const CartPage = () => {
   const [selectedStore, setSelectedStore] = useState({});
 
   const formatINR = (amount) => {
-    return amount.toLocaleString('en-IN', {
+    if (amount === undefined || amount === null) return '₹0';
+    return parseFloat(amount).toLocaleString('en-IN', {
       style: 'currency',
       currency: 'INR',
       minimumFractionDigits: 0,
@@ -223,9 +225,11 @@ const CartPage = () => {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 via-yellow-50 to-red-50">
+      <Navbar />
+      
       {/* Header */}
-      <div className="bg-gradient-to-r from-red-600 to-orange-600 text-white shadow-md">
-        <div className="max-w-4xl mx-auto px-4 py-6">
+      <div className="pt-32 pb-8">
+        <div className="max-w-4xl mx-auto px-4 py-6 bg-gradient-to-r from-red-600 to-orange-600 text-white shadow-md rounded-lg">
           <div className="flex items-center gap-4">
             <button
               onClick={() => navigate(-1)}
@@ -247,17 +251,17 @@ const CartPage = () => {
       </div>
 
       {/* Cart Content */}
-      <div className="max-w-4xl mx-auto px-4 py-8">
+      <div className="max-w-4xl mx-auto px-4 pb-16">
         {cartItems.length === 0 ? (
-          <div className="text-center py-16">
+          <div className="text-center py-16 bg-white rounded-lg shadow-md">
             <ShoppingCart className="w-24 h-24 mx-auto text-gray-300 mb-4" />
             <h2 className="text-2xl font-semibold text-gray-700 mb-2">Your cart is empty</h2>
             <p className="text-gray-500 mb-6">Add some products to get started!</p>
             <button
-              onClick={() => navigate('/chat')}
+              onClick={() => navigate('/products')}
               className="bg-gradient-to-r from-red-600 to-orange-600 text-white px-6 py-3 rounded-lg font-semibold hover:from-red-700 hover:to-orange-700 transition-all"
             >
-              Start Shopping
+              Continue Shopping
             </button>
           </div>
         ) : (
@@ -283,7 +287,7 @@ const CartPage = () => {
                   <div className="flex-1">
                     <h3 className="font-semibold text-lg text-gray-900">{item.name}</h3>
                     <p className="text-sm text-gray-500 mt-1">SKU: {item.sku}</p>
-                    <p className="text-lg font-bold text-green-600 mt-2">
+                    <p className="textont-bold text-green-600 mt-2">
                       {formatINR(item.unit_price)}
                     </p>
 
@@ -367,7 +371,7 @@ const CartPage = () => {
                   <div className="text-right">
                     <p className="text-sm text-gray-500">Total</p>
                     <p className="text-xl font-bold text-gray-900">
-                      {formatINR(item.unit_price * item.qty)}
+                      {formatINR(item.price * item.qty)}
                     </p>
                   </div>
                 </div>
