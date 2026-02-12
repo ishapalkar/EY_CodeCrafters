@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🛍️ EDGE - AI-Powered E-Commerce Platform
+# EY Techathon 6.0 – Retail Conversational Sales Agent
 
 ### Built by EY CodeCrafters
 
@@ -44,32 +44,9 @@
 </tr>
 </table>
 
----
-
-## 📋 Table of Contents
-
-<details>
-<summary>Click to expand</summary>
-
-- [Overview](#-overview)
-- [Architecture](#-architecture)
-- [Core Features](#-core-features)
-- [Tech Stack](#-tech-stack)
-- [Quick Start](#-quick-start)
-- [Microservices Architecture](#-microservices-architecture)
-- [Testing](#-testing)
-- [Deployment](#-deployment)
-- [Configuration](#-configuration)
-- [Contributing](#-contributing)
-- [Support](#-support)
-
-</details>
-
----
-
 ## 🌟 Overview
 
-**EDGE** is an enterprise-grade e-commerce platform that combines modern microservices architecture with cutting-edge AI capabilities to deliver a seamless shopping experience. Built with scalability, reliability, and user experience in mind.
+**An Agentic AI-powered omni-channel retail platform that delivers a seamless conversational sales experience across web, kiosk, and messaging channels.**
 
 ### 🎯 Platform Capabilities
 
