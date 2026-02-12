@@ -132,11 +132,17 @@ const CheckoutPage = () => {
               // Don't fail the payment for this - it's not critical
             }
 
-            // Redirect to order detail page after 1.5 seconds
+            // Redirect to chat with payment success message after 1.5 seconds
             setTimeout(() => {
               const oid = razorpayOrder.order_id || razorpayOrder.order?.id || razorpayOrder.order_id;
-              if (oid) navigate(`/orders/${oid}`);
-              else navigate('/orders');
+              navigate('/chat', { 
+                state: { 
+                  paymentSuccess: true,
+                  message: `🎉 Payment successful! Order ID: ${oid}, Payment ID: ${response.razorpay_payment_id}. Your order is being processed.`,
+                  orderId: oid,
+                  paymentId: response.razorpay_payment_id
+                } 
+              });
             }, 1500);
 
           } catch (verificationError) {

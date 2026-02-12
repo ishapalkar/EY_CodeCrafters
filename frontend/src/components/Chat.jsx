@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 
 import {
   Send,
@@ -132,6 +132,7 @@ const SUPPORT_TITLES = {
 
 const Chat = () => {
   const navigate = useNavigate();
+  const location = useLocation();
   const { addToCart, clearCart, cartItems } = useCart();
   const [toast, setToast] = useState({ show: false, message: '' });
 
@@ -205,6 +206,15 @@ const Chat = () => {
       });
     }
   }, []);
+
+  // Track if payment message was already handled
+  const paymentMessageHandledRef = useRef(false);
+  // Track if post-purchase/stylist requests were already handled
+  const postPurchaseHandledRef = useRef(false);
+  const stylistHandledRef = useRef(false);
+
+  // Payment success message is now handled directly in startOrRestoreSession()
+  // to ensure it's added AFTER session messages are restored
 
   useEffect(() => {
     if (!sessionToken) {
@@ -312,6 +322,82 @@ const Chat = () => {
     startOrRestoreSession();
   }, [navigate]);
 
+  // Effect to fetch stylist suggestions when a message has stylistPending: true
+  useEffect(() => {
+    const pendingMessage = messages.find(msg => msg.stylistPending && msg.stylistProduct);
+    if (!pendingMessage) return;
+
+    const fetchStylistSuggestions = async () => {
+      try {
+        const product = pendingMessage.stylistProduct;
+        const stylistPayload = {
+          user_id: userId || sessionStore.getCustomerId() || 'guest',
+          product_sku: product.sku || '',
+          product_name: product.name || 'Purchased item',
+          category: product.category || 'Apparel',
+          color: product.color || '',
+          brand: product.brand || '',
+        };
+
+        const stylistResponse = await salesAgentService.getStylistSuggestions(stylistPayload);
+        const stylistBundle = stylistResponse?.recommendations || {};
+        const recommendedProducts = Array.isArray(stylistBundle?.recommended_products)
+          ? stylistBundle.recommended_products
+              .map((item) => ({
+                sku: item?.sku || '',
+                name: item?.name || '',
+                reason: item?.reason || '',
+                image_url: item?.image_url || item?.image || '',
+                price: item?.price || 0,
+                brand: item?.brand || '',
+                rating: item?.rating || 0,
+                personalized_reason: item?.personalized_reason || item?.reason || '',
+              }))
+              .filter((item) => item.sku || item.name || item.reason)
+          : [];
+        const stylingTips = Array.isArray(stylistBundle?.styling_tips)
+          ? stylistBundle.styling_tips.filter((tip) => typeof tip === 'string' && tip.trim())
+          : [];
+
+        // Update the message with stylist recommendations
+        setMessages(prev => prev.map(msg => {
+          if (msg.id === pendingMessage.id) {
+            return {
+              ...msg,
+              text: stylistResponse?.success && (recommendedProducts.length || stylingTips.length)
+                ? `👗 Our stylist has styling suggestions for your ${product.name || 'purchase'}!`
+                : `👗 Sorry, no styling suggestions available at this time.`,
+              stylistPending: false,
+              stylistRecommendations: (stylistResponse?.success && (recommendedProducts.length || stylingTips.length))
+                ? {
+                    purchasedProduct: stylistResponse.purchased_product || stylistPayload,
+                    recommendedProducts,
+                    stylingTips,
+                    recommendationId: stylistResponse.recommendation_id || '',
+                  }
+                : null
+            };
+          }
+          return msg;
+        }));
+      } catch (error) {
+        console.error('Failed to fetch stylist suggestions:', error);
+        setMessages(prev => prev.map(msg => {
+          if (msg.id === pendingMessage.id) {
+            return {
+              ...msg,
+              text: `👗 Sorry, couldn't fetch styling suggestions. Please try again later.`,
+              stylistPending: false
+            };
+          }
+          return msg;
+        }));
+      }
+    };
+
+    fetchStylistSuggestions();
+  }, [messages, userId]);
+
   // Helper to normalize surrounding quotes from messages so we only add one pair
   const normalizeQuotes = (text) => {
     if (!text) return '';
@@ -388,7 +474,111 @@ const Chat = () => {
                 status: 'read',
                 cards: msg.metadata?.cards || []
               }));
+              
+              // Check for pending payment success message from navigation state
+              if (location.state?.paymentSuccess && location.state?.message && !paymentMessageHandledRef.current) {
+                paymentMessageHandledRef.current = true;
+                const paymentMessage = {
+                  id: chatMessages.length + 1,
+                  text: location.state.message,
+                  sender: 'agent',
+                  timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                  status: 'delivered',
+                  metadata: { type: 'payment_success', orderId: location.state.orderId, paymentId: location.state.paymentId }
+                };
+                chatMessages.push(paymentMessage);
+                navigate(location.pathname, { replace: true, state: {} });
+              }
+              
+              // Check for post-purchase request from navigation state
+              if (location.state?.postPurchaseRequest && !postPurchaseHandledRef.current) {
+                postPurchaseHandledRef.current = true;
+                const postPurchaseMessage = {
+                  id: chatMessages.length + 1,
+                  text: `📦 Post-Purchase Support for Order ${location.state.orderId}\n\nHow can I help you today? Please select an option:`,
+                  sender: 'agent',
+                  timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                  status: 'delivered',
+                  postPurchaseOptions: {
+                    orderId: location.state.orderId,
+                    orderItems: location.state.orderItems,
+                    userId: location.state.userId,
+                    productName: location.state.orderItems?.[0]?.name || null
+                  }
+                };
+                chatMessages.push(postPurchaseMessage);
+                navigate(location.pathname, { replace: true, state: {} });
+              }
+              
+              // Check for stylist request from navigation state
+              if (location.state?.stylistRequest && !stylistHandledRef.current) {
+                stylistHandledRef.current = true;
+                const stylistMessage = {
+                  id: chatMessages.length + 1,
+                  text: `👗 Fetching personalized styling suggestions for your order...`,
+                  sender: 'agent',
+                  timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                  status: 'delivered',
+                  metadata: { 
+                    type: 'stylist_request',
+                    orderId: location.state.orderId,
+                    product: location.state.product
+                  },
+                  stylistPending: true,
+                  stylistProduct: location.state.product
+                };
+                chatMessages.push(stylistMessage);
+                navigate(location.pathname, { replace: true, state: {} });
+              }
+              
               setMessages(chatMessages);
+            } else if (location.state?.paymentSuccess && location.state?.message && !paymentMessageHandledRef.current) {
+              // No chat context but payment message exists
+              paymentMessageHandledRef.current = true;
+              setMessages([{
+                id: 1,
+                text: location.state.message,
+                sender: 'agent',
+                timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                status: 'delivered',
+                metadata: { type: 'payment_success', orderId: location.state.orderId, paymentId: location.state.paymentId }
+              }]);
+              navigate(location.pathname, { replace: true, state: {} });
+            } else if (location.state?.postPurchaseRequest && !postPurchaseHandledRef.current) {
+              // No chat context but post-purchase request exists
+              postPurchaseHandledRef.current = true;
+              setMessages([{
+                id: 1,
+                text: `📦 Post-Purchase Support for Order ${location.state.orderId}\n\nHow can I help you today? Please select an option:`,
+                sender: 'agent',
+                timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                status: 'delivered',
+                postPurchaseOptions: {
+                  orderId: location.state.orderId,
+                  orderItems: location.state.orderItems,
+                  userId: location.state.userId,
+                  productName: location.state.orderItems?.[0]?.name || null
+                }
+              }]);
+              navigate(location.pathname, { replace: true, state: {} });
+            } else if (location.state?.stylistRequest && !stylistHandledRef.current) {
+              // No chat context but stylist request exists
+              stylistHandledRef.current = true;
+              setMessages([{
+                id: 1,
+                text: `👗 Fetching personalized styling suggestions for your order...`,
+                sender: 'agent',
+                timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+                status: 'delivered',
+                metadata: { 
+                  type: 'stylist_request',
+                  orderId: location.state.orderId,
+                  product: location.state.product
+                },
+                stylistPending: true,
+                stylistProduct: location.state.product
+              }]);
+              navigate(location.pathname, { replace: true, state: {} });
             }
             return;
           }
@@ -433,15 +623,119 @@ const Chat = () => {
           status: 'read',
           cards: msg.metadata?.cards || []
         }));
+        
+        // Check for pending payment success message from navigation state
+        if (location.state?.paymentSuccess && location.state?.message && !paymentMessageHandledRef.current) {
+          paymentMessageHandledRef.current = true;
+          const paymentMessage = {
+            id: chatMessages.length + 1,
+            text: location.state.message,
+            sender: 'agent',
+            timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            status: 'delivered',
+            metadata: { type: 'payment_success', orderId: location.state.orderId, paymentId: location.state.paymentId }
+          };
+          chatMessages.push(paymentMessage);
+          navigate(location.pathname, { replace: true, state: {} });
+        }
+        
+        // Check for post-purchase request
+        if (location.state?.postPurchaseRequest && !postPurchaseHandledRef.current) {
+          postPurchaseHandledRef.current = true;
+          chatMessages.push({
+            id: chatMessages.length + 1,
+            text: `📦 Post-Purchase Support for Order ${location.state.orderId}\n\nHow can I help you today? Please select an option:`,
+            sender: 'agent',
+            timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            status: 'delivered',
+            postPurchaseOptions: {
+              orderId: location.state.orderId,
+              orderItems: location.state.orderItems,
+              userId: location.state.userId,
+              productName: location.state.orderItems?.[0]?.name || null
+            }
+          });
+          navigate(location.pathname, { replace: true, state: {} });
+        }
+        
+        // Check for stylist request
+        if (location.state?.stylistRequest && !stylistHandledRef.current) {
+          stylistHandledRef.current = true;
+          chatMessages.push({
+            id: chatMessages.length + 1,
+            text: `👗 Fetching personalized styling suggestions for your order...`,
+            sender: 'agent',
+            timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            status: 'delivered',
+            metadata: { 
+              type: 'stylist_request',
+              orderId: location.state.orderId,
+              product: location.state.product
+            },
+            stylistPending: true,
+            stylistProduct: location.state.product
+          });
+          navigate(location.pathname, { replace: true, state: {} });
+        }
+        
         setMessages(chatMessages);
       } else {
-        setMessages([{
-          id: 1,
-          text: "Hello! I'm your AI Sales Agent. How can I help you today?",
-          sender: 'agent',
-          timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
-          status: 'read'
-        }]);
+        // Check for pending messages when starting fresh session
+        let initialMessages = [];
+        if (location.state?.paymentSuccess && location.state?.message && !paymentMessageHandledRef.current) {
+          paymentMessageHandledRef.current = true;
+          initialMessages.push({
+            id: 1,
+            text: location.state.message,
+            sender: 'agent',
+            timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            status: 'delivered',
+            metadata: { type: 'payment_success', orderId: location.state.orderId, paymentId: location.state.paymentId }
+          });
+          navigate(location.pathname, { replace: true, state: {} });
+        } else if (location.state?.postPurchaseRequest && !postPurchaseHandledRef.current) {
+          postPurchaseHandledRef.current = true;
+          initialMessages.push({
+            id: 1,
+            text: `📦 Post-Purchase Support for Order ${location.state.orderId}\n\nHow can I help you today? Please select an option:`,
+            sender: 'agent',
+            timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            status: 'delivered',
+            postPurchaseOptions: {
+              orderId: location.state.orderId,
+              orderItems: location.state.orderItems,
+              userId: location.state.userId,
+              productName: location.state.orderItems?.[0]?.name || null
+            }
+          });
+          navigate(location.pathname, { replace: true, state: {} });
+        } else if (location.state?.stylistRequest && !stylistHandledRef.current) {
+          stylistHandledRef.current = true;
+          initialMessages.push({
+            id: 1,
+            text: `👗 Fetching personalized styling suggestions for your order...`,
+            sender: 'agent',
+            timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            status: 'delivered',
+            metadata: { 
+              type: 'stylist_request',
+              orderId: location.state.orderId,
+              product: location.state.product
+            },
+            stylistPending: true,
+            stylistProduct: location.state.product
+          });
+          navigate(location.pathname, { replace: true, state: {} });
+        } else {
+          initialMessages.push({
+            id: 1,
+            text: "Hello! I'm your AI Sales Agent. How can I help you today?",
+            sender: 'agent',
+            timestamp: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+            status: 'read'
+          });
+        }
+        setMessages(initialMessages);
       }
     } catch (error) {
       console.error('Session error:', error);
@@ -721,7 +1015,7 @@ const Chat = () => {
         }
         case 'feedback': {
           if (!supportForm.product_sku || !supportForm.size_purchased) {
-            setSupportError('Product SKU and purchased size are required.');
+            setSupportError('Please select an item and enter the size purchased.');
             setSupportLoading(false);
             return;
           }
@@ -2554,19 +2848,30 @@ const Chat = () => {
                         <input
                           type="text"
                           value={supportForm.order_id || ''}
-                          onChange={(e) => updateSupportForm('order_id', e.target.value)}
-                          className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
-                          required
+                          readOnly
+                          className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm bg-gray-100"
                         />
                       </label>
-                      <label className="block text-xs font-medium text-gray-600 uppercase">Product SKU
-                        <input
-                          type="text"
+                      <label className="block text-xs font-medium text-gray-600 uppercase">Select Item to Return
+                        <select
                           value={supportForm.product_sku || ''}
-                          onChange={(e) => updateSupportForm('product_sku', e.target.value)}
+                          onChange={(e) => {
+                            const selectedItem = (supportContext.orderItems || []).find(it => it.sku === e.target.value);
+                            updateSupportForm('product_sku', e.target.value);
+                            if (selectedItem) {
+                              updateSupportForm('product_name', selectedItem.name || selectedItem.sku);
+                            }
+                          }}
                           className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
                           required
-                        />
+                        >
+                          <option value="" disabled>Select an item from your order</option>
+                          {(supportContext.orderItems || []).map((item) => (
+                            <option key={item.sku} value={item.sku}>
+                              {item.name || item.sku} {item.brand ? `(${item.brand})` : ''}
+                            </option>
+                          ))}
+                        </select>
                       </label>
                       <label className="block text-xs font-medium text-gray-600 uppercase">Return Reason
                         <select
@@ -2610,19 +2915,30 @@ const Chat = () => {
                         <input
                           type="text"
                           value={supportForm.order_id || ''}
-                          onChange={(e) => updateSupportForm('order_id', e.target.value)}
-                          className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
-                          required
+                          readOnly
+                          className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm bg-gray-100"
                         />
                       </label>
-                      <label className="block text-xs font-medium text-gray-600 uppercase">Product SKU
-                        <input
-                          type="text"
+                      <label className="block text-xs font-medium text-gray-600 uppercase">Select Item
+                        <select
                           value={supportForm.product_sku || ''}
-                          onChange={(e) => updateSupportForm('product_sku', e.target.value)}
+                          onChange={(e) => {
+                            const selectedItem = (supportContext.orderItems || []).find(it => it.sku === e.target.value);
+                            updateSupportForm('product_sku', e.target.value);
+                            if (selectedItem) {
+                              updateSupportForm('product_name', selectedItem.name || selectedItem.sku);
+                            }
+                          }}
                           className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
                           required
-                        />
+                        >
+                          <option value="" disabled>Select an item from your order</option>
+                          {(supportContext.orderItems || []).map((item) => (
+                            <option key={item.sku} value={item.sku}>
+                              {item.name || item.sku} {item.brand ? `(${item.brand})` : ''}
+                            </option>
+                          ))}
+                        </select>
                       </label>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <label className="block text-xs font-medium text-gray-600 uppercase">Current Size
@@ -2664,12 +2980,12 @@ const Chat = () => {
                           className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm bg-gray-100"
                         />
                       </label>
-                      <label className="block text-xs font-medium text-gray-600 uppercase">Order ID (optional)
+                      <label className="block text-xs font-medium text-gray-600 uppercase">Order ID
                         <input
                           type="text"
                           value={supportForm.order_id || ''}
-                          onChange={(e) => updateSupportForm('order_id', e.target.value)}
-                          className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
+                          readOnly
+                          className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm bg-gray-100"
                         />
                       </label>
                       <label className="block text-xs font-medium text-gray-600 uppercase">Issue Type
@@ -2721,14 +3037,26 @@ const Chat = () => {
                           className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm bg-gray-100"
                         />
                       </label>
-                      <label className="block text-xs font-medium text-gray-600 uppercase">Product SKU
-                        <input
-                          type="text"
+                      <label className="block text-xs font-medium text-gray-600 uppercase">Select Item
+                        <select
                           value={supportForm.product_sku || ''}
-                          onChange={(e) => updateSupportForm('product_sku', e.target.value)}
+                          onChange={(e) => {
+                            const selectedItem = (supportContext.orderItems || []).find(it => it.sku === e.target.value);
+                            updateSupportForm('product_sku', e.target.value);
+                            if (selectedItem) {
+                              updateSupportForm('product_name', selectedItem.name || selectedItem.sku);
+                            }
+                          }}
                           className="mt-1 w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
                           required
-                        />
+                        >
+                          <option value="" disabled>Select an item from your order</option>
+                          {(supportContext.orderItems || []).map((item) => (
+                            <option key={item.sku} value={item.sku}>
+                              {item.name || item.sku} {item.brand ? `(${item.brand})` : ''}
+                            </option>
+                          ))}
+                        </select>
                       </label>
                       <label className="block text-xs font-medium text-gray-600 uppercase">Size Purchased
                         <input

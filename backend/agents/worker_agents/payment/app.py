@@ -766,6 +766,64 @@ def _update_inventory(normalized_items: List[Dict[str, Any]], default_store: Opt
                 logger.warning(f"⚠️  Failed to update Redis inventory for {sku}/{store_id}: {exc}")
 
 
+def _notify_session_manager_of_payment(metadata: Dict[str, Any], user_id: Optional[str], payment_id: str, order_id: str) -> None:
+    """Attempt to notify the Session Manager to append a chat message about a successful payment.
+
+    This is best-effort and will not raise on error.
+    """
+    try:
+        session_mgr = os.getenv("SESSION_MANAGER_URL", "http://localhost:8000").rstrip('/')
+
+        # Prefer an explicit session token if provided in metadata
+        session_token = None
+        if isinstance(metadata, dict):
+            session_token = metadata.get("session_token") or metadata.get("sessionToken")
+
+        # Determine a phone hint if available
+        phone = None
+        if isinstance(metadata, dict):
+            phone = metadata.get("phone") or metadata.get("phone_number") or metadata.get("phoneNumber")
+        if not phone and user_id:
+            phone = str(user_id)
+
+        message = f"Payment successful — payment_id={payment_id}, order_id={order_id}"
+
+        # If we don't have a session token, try to recover one from the session/restore endpoint using phone
+        if not session_token and phone:
+            try:
+                resp = requests.get(f"{session_mgr}/session/restore", headers={"X-Phone": phone}, timeout=3)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    session_token = data.get("session_token") or (data.get("session") or {}).get("session_token")
+            except Exception:
+                logger.debug("Could not restore session by phone; continuing without session token")
+
+        # If we have a session token, post an update action
+        if session_token:
+            try:
+                update_url = f"{session_mgr}/session/update"
+                payload = {
+                    "action": "chat_message",
+                    "payload": {
+                        "sender": "agent",
+                        "message": message,
+                        "metadata": {"payment_id": payment_id, "order_id": order_id}
+                    }
+                }
+                headers = {"X-Session-Token": session_token, "Content-Type": "application/json"}
+                resp = requests.post(update_url, json=payload, headers=headers, timeout=3)
+                if resp.status_code != 200:
+                    logger.warning(f"[payment] Session update returned {resp.status_code}: {resp.text}")
+                else:
+                    logger.info(f"[payment] Notified session manager for payment {payment_id}")
+            except Exception as e:
+                logger.warning(f"[payment] Failed to notify session manager: {e}")
+        else:
+            logger.debug("No session token or phone available; skipping session notify")
+    except Exception as e:
+        logger.warning(f"[payment] Unexpected error notifying session manager: {e}")
+
+
 # ==========================================
 # REQUEST/RESPONSE MODELS
 # ==========================================
@@ -1133,6 +1191,10 @@ async def verify_razorpay_payment(payload: RazorpayVerifyRequest):
 
     user_key = payload.user_id or payment_id
     _store_transaction_safely(payment_id, transaction_payload, user_key, amount_rupees)
+    try:
+        _notify_session_manager_of_payment(metadata, payload.user_id or customer_id, payment_id, canonical_order_id)
+    except Exception:
+        logger.debug("Notification to session manager failed (non-fatal)")
 
     return {
         "status": "ok",
@@ -1325,6 +1387,11 @@ async def process_payment(request: PaymentRequest):
                 "timestamp": timestamp,
                 "order_id": canonical_order_id
             }
+
+            try:
+                _notify_session_manager_of_payment(metadata_dict, request.user_id or customer_id, payment_id, canonical_order_id)
+            except Exception:
+                logger.debug("Notification to session manager failed (non-fatal)")
 
         except Exception as e:
             logger.error(f"Post-payment update failed: {e}")

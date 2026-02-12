@@ -4,10 +4,26 @@ Redis utilities for Stylist Agent
 import redis
 import os
 import pandas as pd
-from typing import Optional, Dict, List, Iterable
+import numpy as np
+from typing import Optional, Dict, List, Iterable, Any
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Helper to convert numpy types to native Python types
+def _to_native(val: Any) -> Any:
+    """Convert numpy types to native Python types for JSON serialization."""
+    if val is None or (isinstance(val, float) and np.isnan(val)):
+        return None
+    if isinstance(val, (np.integer, np.int64, np.int32)):
+        return int(val)
+    if isinstance(val, (np.floating, np.float64, np.float32)):
+        return float(val)
+    if isinstance(val, np.ndarray):
+        return val.tolist()
+    if pd.isna(val):
+        return None
+    return val
 
 # Redis Configuration
 REDIS_URL = os.getenv("REDIS_URL")
@@ -73,14 +89,15 @@ def get_product_details(sku: str) -> Optional[Dict]:
             pass
     
     return {
-        "sku": row['sku'],
-        "name": row['ProductDisplayName'],
-        "brand": row['brand'] if pd.notna(row['brand']) else 'N/A',
-        "category": row['category'],
-        "subcategory": row['subcategory'],
-        "price": row['price'],
+        "sku": _to_native(row['sku']),
+        "name": _to_native(row['ProductDisplayName']),
+        "brand": _to_native(row['brand']) if pd.notna(row['brand']) else 'N/A',
+        "category": _to_native(row['category']),
+        "subcategory": _to_native(row['subcategory']),
+        "price": _to_native(row['price']),
         "color": color,
         "material": material,
+        "image_url": _to_native(row.get('image_url')) or _to_native(row.get('image')) or None,
         "quantity": int(inventory_totals[inventory_totals['sku'] == row['sku']]['quantity'].iloc[0]) if not inventory_totals[inventory_totals['sku'] == row['sku']].empty else 0
     }
 
@@ -146,13 +163,15 @@ def find_in_stock_products(
     results: List[Dict] = []
     for _, row in df_sorted.iterrows():
         results.append({
-            "sku": row['sku'],
-            "name": row['ProductDisplayName'],
-            "brand": row.get('brand'),
-            "category": row.get('category'),
-            "subcategory": row.get('subcategory'),
-            "price": row.get('price'),
+            "sku": _to_native(row['sku']),
+            "name": _to_native(row['ProductDisplayName']),
+            "brand": _to_native(row.get('brand')),
+            "category": _to_native(row.get('category')),
+            "subcategory": _to_native(row.get('subcategory')),
+            "price": _to_native(row.get('price')),
             "quantity": int(row.get('quantity', 0)),
+            "image_url": _to_native(row.get('image_url')) or _to_native(row.get('image')) or None,
+            "rating": _to_native(row.get('ratings')) or _to_native(row.get('rating')) or 0,
         })
 
     return results
@@ -171,12 +190,13 @@ def search_products_by_category(category: str, subcategory: str = None, limit: i
     results = []
     for _, row in sample.iterrows():
         results.append({
-            "sku": row['sku'],
-            "name": row['ProductDisplayName'],
-            "brand": row['brand'],
-            "price": row['price'],
-            "category": row['category'],
-            "subcategory": row['subcategory']
+            "sku": _to_native(row['sku']),
+            "name": _to_native(row['ProductDisplayName']),
+            "brand": _to_native(row['brand']),
+            "price": _to_native(row['price']),
+            "category": _to_native(row['category']),
+            "subcategory": _to_native(row['subcategory']),
+            "image_url": _to_native(row.get('image_url')) or _to_native(row.get('image')) or None,
         })
     
     return results

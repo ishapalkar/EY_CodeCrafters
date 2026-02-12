@@ -72,6 +72,7 @@ def load_csv(filename):
     """Load CSV file and return as list of dictionaries"""
     try:
         import math
+        import json
         df = pd.read_csv(DATA_DIR / filename)
         records = df.to_dict(orient="records")
         
@@ -86,6 +87,12 @@ def load_csv(filename):
                         clean_record[key] = None
                     elif isinstance(value, float) and math.isnan(value):
                         clean_record[key] = None
+                    elif key == 'items' and isinstance(value, str):
+                        # Parse JSON items field for orders
+                        try:
+                            clean_record[key] = json.loads(value)
+                        except json.JSONDecodeError:
+                            clean_record[key] = value
                     else:
                         clean_record[key] = value
                 except (TypeError, ValueError):
@@ -218,17 +225,40 @@ async def get_customer(customer_id: int):
 async def get_orders(
     limit: int = Query(default=20, le=10000),
     offset: int = Query(default=0, ge=0),
-    customer_id: int = None,
+    customer_id: str = None,
     status: str = None
 ):
-    """Get all orders with optional filters"""
+    """Get all orders with optional filters, enriched with product details"""
     orders = load_csv("orders.csv")
     
     # Apply filters
     if customer_id:
-        orders = [o for o in orders if o.get('customer_id') == customer_id]
+        # Handle both int and string customer_id comparisons
+        try:
+            cid_int = int(customer_id)
+            orders = [o for o in orders if str(o.get('customer_id')) == str(customer_id) or o.get('customer_id') == cid_int]
+        except (ValueError, TypeError):
+            orders = [o for o in orders if str(o.get('customer_id')) == str(customer_id)]
     if status:
         orders = [o for o in orders if o.get('status', '').lower() == status.lower()]
+    
+    # Enrich items with product details
+    for order in orders:
+        items = order.get('items', [])
+        if isinstance(items, list):
+            enriched_items = []
+            for item in items:
+                sku = item.get('sku', '')
+                if sku:
+                    product = get_product(sku)
+                    if product:
+                        item['name'] = product.get('name', product.get('product_name', sku))
+                        item['image'] = product.get('image_url', product.get('image', ''))
+                        item['brand'] = product.get('brand', '')
+                        item['category'] = product.get('category', '')
+                        item['color'] = product.get('color', '')
+                enriched_items.append(item)
+            order['items'] = enriched_items
     
     total = len(orders)
     paginated = orders[offset:offset + limit]
@@ -242,12 +272,29 @@ async def get_orders(
 
 @app.get("/orders/{order_id}")
 async def get_order(order_id: str):
-    """Get specific order"""
+    """Get specific order with enriched product details"""
     orders = load_csv("orders.csv")
     order = next((o for o in orders if o['order_id'] == order_id), None)
     
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    
+    # Enrich items with product details
+    items = order.get('items', [])
+    if isinstance(items, list):
+        enriched_items = []
+        for item in items:
+            sku = item.get('sku', '')
+            if sku:
+                product = get_product(sku)
+                if product:
+                    item['name'] = product.get('name', product.get('product_name', sku))
+                    item['image'] = product.get('image_url', product.get('image', ''))
+                    item['brand'] = product.get('brand', '')
+                    item['category'] = product.get('category', '')
+                    item['color'] = product.get('color', '')
+            enriched_items.append(item)
+        order['items'] = enriched_items
     
     return order
 

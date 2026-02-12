@@ -1,5 +1,4 @@
-"""
-Redis utilities for Post-Purchase Agent
+"""Redis utilities for Post-Purchase Agent
 """
 import json
 import os
@@ -38,12 +37,18 @@ IN_MEMORY_USER_COMPLAINTS: Dict[str, List[str]] = {}
 IN_MEMORY_FEEDBACK: Dict[str, Dict] = {}
 IN_MEMORY_USER_FEEDBACK: Dict[str, List[str]] = {}
 
-# Load orders and products data
+# Load orders and products data paths (orders loaded on-demand)
 ORDERS_CSV = os.path.join(os.path.dirname(__file__), "../../../data/orders.csv")
 PRODUCTS_CSV = os.path.join(os.path.dirname(__file__), "../../../data/products.csv")
 
-orders_df = pd.read_csv(ORDERS_CSV)
+# Load products once (catalog relatively static)
 products_df = pd.read_csv(PRODUCTS_CSV)
+
+# Load orders once (can be reloaded if needed)
+try:
+    orders_df = pd.read_csv(ORDERS_CSV)
+except Exception:
+    orders_df = pd.DataFrame()
 
 # Normalize column names for new CSV schema
 if "product_display_name" in products_df.columns and "ProductDisplayName" not in products_df.columns:
@@ -82,6 +87,14 @@ def _get_dynamic_order(order_id: str) -> Optional[Dict]:
 
 def get_order_details(order_id: str) -> Optional[Dict]:
     """Get order details from orders.csv or dynamically registered orders."""
+    global orders_df
+    
+    # Reload orders to get latest data
+    try:
+        orders_df = pd.read_csv(ORDERS_CSV)
+    except Exception:
+        pass
+    
     order = orders_df[orders_df['order_id'] == order_id]
 
     if order.empty:
@@ -89,7 +102,7 @@ def get_order_details(order_id: str) -> Optional[Dict]:
         if dynamic:
             return dynamic
         return None
-    
+
     row = order.iloc[0]
     items_raw = eval(row['items'])
     
@@ -121,6 +134,14 @@ def get_order_details(order_id: str) -> Optional[Dict]:
 
 def get_user_orders(user_id: str) -> List[Dict]:
     """Get all orders for a user"""
+    global orders_df
+    
+    # Reload orders to get latest data
+    try:
+        orders_df = pd.read_csv(ORDERS_CSV)
+    except Exception:
+        pass
+    
     user_orders = orders_df[orders_df['customer_id'] == int(user_id)]
     
     orders_list = []
@@ -152,8 +173,7 @@ def get_user_orders(user_id: str) -> List[Dict]:
             })
     
     return orders_list
-    
-    return order_data if order_data else None
+
 
 
 def store_dynamic_order(order_data: Dict) -> Dict:

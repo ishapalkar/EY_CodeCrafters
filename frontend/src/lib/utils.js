@@ -28,6 +28,8 @@ export function resolveImageUrl(imagePath) {
   }
   
   // Relative path from CSV - construct backend URL
-  const cleanPath = imagePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  // Strip 'product_images/' prefix since /images already serves from that folder
+  let cleanPath = imagePath.replace(/\\/g, '/').replace(/^\/+/, '');
+  cleanPath = cleanPath.replace(/^product_images\//, '');
   return `http://localhost:8007/images/${cleanPath}`;
 }

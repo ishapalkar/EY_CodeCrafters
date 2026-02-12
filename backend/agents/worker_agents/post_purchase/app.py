@@ -542,5 +542,37 @@ async def get_issue_types():
     }
 
 
+@app.post("/post-purchase/register-order")
+async def register_order(request: RegisterOrderRequest):
+    """
+    Register a completed order for post-purchase tracking.
+    Called by frontend after successful payment to enable returns, exchanges, etc.
+    """
+    try:
+        order_data = {
+            "order_id": request.order_id,
+            "customer_id": request.user_id,  # Map user_id to customer_id for redis_utils
+            "items": [item.dict() for item in request.items],
+            "total_amount": request.amount,
+            "status": request.status or "completed",
+            "created_at": request.created_at or datetime.now().isoformat(),
+            "shipping_address": request.shipping_address,
+            "metadata": request.metadata,
+        }
+        
+        # Store order in Redis for post-purchase operations (single argument)
+        redis_utils.store_dynamic_order(order_data)
+        
+        return {
+            "success": True,
+            "order_id": request.order_id,
+            "status": "registered",
+            "message": f"Order {request.order_id} registered for post-purchase support",
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8005)

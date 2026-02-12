@@ -199,7 +199,7 @@ def get_ai_outfit_suggestions(product: ProductDict) -> Dict:
 
     specs = _build_complementary_specs(product)
     used_skus = {purchase_sku}
-    recommended_products: List[Dict[str, str]] = []
+    recommended_products: List[Dict[str, Any]] = []
 
     for spec in specs:
         matches = redis_utils.find_in_stock_products(
@@ -217,17 +217,28 @@ def get_ai_outfit_suggestions(product: ProductDict) -> Dict:
         recommended_products.append({
             "sku": item['sku'],
             "name": item['name'],
-            "reason": reason
+            "reason": reason,
+            "personalized_reason": reason,
+            "image_url": item.get('image_url') or item.get('image') or '',
+            "price": item.get('price', 0),
+            "brand": item.get('brand', ''),
+            "rating": item.get('rating', 0),
         })
 
     if not recommended_products:
         # fallback to any in-stock items
         fallback_items = redis_utils.find_in_stock_products(exclude_skus=used_skus, limit=3)
         for item in fallback_items:
+            reason = f"{item['name']} is in stock and complements {purchase_name} seamlessly."
             recommended_products.append({
                 "sku": item['sku'],
                 "name": item['name'],
-                "reason": f"{item['name']} is in stock and complements {purchase_name} seamlessly."
+                "reason": reason,
+                "personalized_reason": reason,
+                "image_url": item.get('image_url') or item.get('image') or '',
+                "price": item.get('price', 0),
+                "brand": item.get('brand', ''),
+                "rating": item.get('rating', 0),
             })
 
     styling_tips = _generate_styling_tips(purchase_name, recommended_products)
