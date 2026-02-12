@@ -220,6 +220,90 @@ async def health_check():
     }
 
 
+@app.get("/api/customer-context")
+async def get_customer_context(session_token: str):
+    """
+    Get customer context summary for Kiosk display.
+    Sales staff can call this to see customer history before interaction.
+    
+    Args:
+        session_token: Session token to fetch context for
+        
+    Returns:
+        Customer context including summary, cart, last actions
+    """
+    logger.info(f"📋 Fetching customer context for token: {session_token[:20]}...")
+    
+    try:
+        # Fetch session data
+        sess_resp = requests.get(
+            "http://localhost:8000/session/restore",
+            headers={"X-Session-Token": session_token},
+            timeout=8
+        )
+        
+        if sess_resp.status_code != 200:
+            return JSONResponse(
+                status_code=404,
+                content={"error": "Session not found", "has_context": False}
+            )
+        
+        sess = sess_resp.json().get("session", {})
+        session_data = sess.get("data", {})
+        conversation_history = session_data.get("chat_context", [])
+        
+        # Extract metadata
+        summary = session_data.get("conversation_summary", "")
+        cart = session_data.get("cart", [])
+        last_action = session_data.get("last_action")
+        last_skus = session_data.get("last_recommended_skus", [])
+        channels = session_data.get("channels", [])
+        
+        # Check if there's meaningful context
+        has_context = bool(summary or cart or len(conversation_history) > 0)
+        
+        if not has_context:
+            return {
+                "has_context": False,
+                "message": "No previous interaction found"
+            }
+        
+        # Build context response
+        context = {
+            "has_context": True,
+            "summary": {
+                "text": summary or "Customer is just starting their shopping journey.",
+                "cart_items": len(cart),
+                "interactions": len(conversation_history),
+                "last_action": last_action or "browsing",
+                "previous_channels": channels
+            },
+            "cart": cart[:10],  # First 10 items
+            "last_products_viewed": last_skus[:10],
+            "customer_info": {
+                "phone": sess.get("phone"),
+                "customer_id": sess.get("customer_id"),
+                "session_duration": len(conversation_history),
+                "active_since": sess.get("created_at", "unknown")
+            },
+            "recommendations": {
+                "should_upsell": len(cart) > 0,
+                "should_complete_checkout": len(cart) > 2,
+                "interests": session_data.get("recent", [])[:5]
+            }
+        }
+        
+        logger.info(f"✅ Context fetched: {len(cart)} items, {len(conversation_history)} messages")
+        return context
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to fetch customer context: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Failed to fetch context", "has_context": False}
+        )
+
+
 @app.post("/api/visual-search")
 async def visual_search(image: UploadFile = File(...)):
     """
@@ -484,6 +568,8 @@ async def handle_message(request: MessageRequest):
     # Fetch conversation history and session data for context
     conversation_history = []
     enhanced_metadata = request.metadata.copy() if request.metadata else {}
+    session_metadata = {}
+    has_previous_summary = False
     
     if request.session_token:
         try:
@@ -496,14 +582,57 @@ async def handle_message(request: MessageRequest):
                 sess = sess_resp.json().get("session", {})
                 conversation_history = sess.get("data", {}).get("chat_context", [])
                 
+                # Extract session metadata for persuasion engine
+                session_data = sess.get("data", {})
+                session_metadata = {
+                    "conversation_summary": session_data.get("conversation_summary", ""),
+                    "last_action": session_data.get("last_action"),
+                    "last_recommended_skus": session_data.get("last_recommended_skus", []),
+                    "cart": session_data.get("cart", []),
+                    "recent": session_data.get("recent", []),
+                    "channels": session_data.get("channels", []),
+                    "has_summary": bool(session_data.get("conversation_summary"))
+                }
+                has_previous_summary = bool(session_data.get("conversation_summary"))
+                
                 # Enhance metadata with session data
                 enhanced_metadata["phone"] = sess.get("phone")
                 enhanced_metadata["user_id"] = sess.get("user_id")
                 enhanced_metadata["session_id"] = sess.get("session_id")
                 enhanced_metadata["customer_id"] = sess.get("customer_id")
+                enhanced_metadata["session_metadata"] = session_metadata
                 
                 logger.info(f"📚 Retrieved {len(conversation_history)} conversation turns")
                 logger.info(f"📞 Session phone: {sess.get('phone')}")
+                
+                # Get channel from session
+                channel = sess.get("channel", "web")
+                enhanced_metadata["channel"] = channel
+                
+                if has_previous_summary:
+                    previous_channels = session_metadata.get("channels", [])
+                    summary = session_metadata.get("conversation_summary", "")
+                    
+                    logger.info(f"🔄 Session restored with summary: {summary[:80]}...")
+                    logger.info(f"📱 Current channel: '{channel}', Previous channels: {previous_channels}")
+                    logger.info(f"💾 Has summary: {bool(summary)}, Conv history length: {len(conversation_history)}")
+                    
+                    # For KIOSK channel with summary, show restoration on first kiosk interaction
+                    # Only trigger if this looks like a cross-channel restoration
+                    if channel == "kiosk" and summary:
+                        logger.info(f"🖥️  Kiosk with summary detected - checking if restoration needed")
+                        
+                        # Show restoration if: coming from another channel OR very few messages on kiosk
+                        should_restore = (
+                            (previous_channels and previous_channels[-1] != "kiosk") or  # Different channel last time
+                            len(conversation_history) <= 8  # Still early in conversation
+                        )
+                        
+                        if should_restore:
+                            logger.info(f"✅ Kiosk restoration will be triggered")
+                            enhanced_metadata["is_kiosk_restoration"] = True
+                        else:
+                            logger.info(f"⏭️  Skipping restoration (already done or too many messages)")
         except Exception as e:
             logger.warning(f"⚠️  Could not fetch conversation history: {e}")
     
@@ -517,16 +646,94 @@ async def handle_message(request: MessageRequest):
             conversation_history=conversation_history
         )
         
+        # For Kiosk channel, prepare summary section for sales staff
+        final_response = result["response"]
+        kiosk_summary_section = None
+        
+        current_channel = enhanced_metadata.get("channel", "web")
+        if current_channel == "kiosk" and has_previous_summary:
+            logger.info("🖥️  Preparing Kiosk summary section for sales staff...")
+            
+            summary = session_metadata.get("conversation_summary", "")
+            cart_items = session_metadata.get("cart", [])
+            last_action = session_metadata.get("last_action", "browsing")
+            last_skus = session_metadata.get("last_recommended_skus", [])
+            previous_channels = session_metadata.get("channels", [])
+            
+            # Build structured summary for Kiosk display
+            kiosk_summary_section = {
+                "type": "customer_context",
+                "title": "Customer Context",
+                "summary": summary,
+                "details": {
+                    "cart_items": len(cart_items),
+                    "last_action": last_action,
+                    "products_viewed": len(last_skus),
+                    "previous_channels": previous_channels,
+                    "interaction_count": len(conversation_history)
+                },
+                "cart": cart_items[:5],  # First 5 cart items
+                "last_recommended": last_skus[:5]  # First 5 SKUs
+            }
+            
+            logger.info(f"✅ Kiosk summary prepared: {len(cart_items)} items, {last_action} action")
+            
+            # Only prepend welcome message on first kiosk interaction
+            if enhanced_metadata.get("is_kiosk_restoration"):
+                logger.info("🖥️  Generating Kiosk welcome message with Groq...")
+                try:
+                    from engine import generate_response
+                    
+                    restoration_prompt = f"""You are greeting a returning customer on a Kiosk screen.
+
+Previous Interaction Summary:
+{summary}
+
+Cart Status: {len(cart_items)} items
+Last Action: {last_action}
+
+Generate a BRIEF (1-2 sentences) friendly welcome-back message that:
+1. Acknowledges their previous interaction naturally
+2. Mentions specific interests from summary
+3. Sounds warm and consultative
+
+Example: "Welcome back! I see you were exploring running shoes earlier."
+
+Generate ONLY the welcome message (no extra text):"""
+                    
+                    # Generate restoration message using Groq
+                    restoration_msg = generate_response(
+                        user_message=restoration_prompt,
+                        conversation_history=[],
+                        session_metadata={}
+                    )
+                    
+                    # Prepend restoration message to actual response
+                    final_response = f"{restoration_msg}\n\n{result['response']}"
+                    logger.info(f"✅ Kiosk welcome message prepended")
+                    
+                except Exception as e:
+                    logger.error(f"❌ Failed to generate welcome message: {e}")
+        
         # Format response for frontend
+        response_metadata = {
+            "processed": True,
+            "worker": result["worker"],
+            "original_metadata": request.metadata,
+            "has_previous_summary": has_previous_summary,
+            "channel": enhanced_metadata.get("channel", "web")
+        }
+        
+        # Add summary for Kiosk channel
+        if kiosk_summary_section:
+            response_metadata["kiosk_summary"] = kiosk_summary_section
+            response_metadata["summary"] = session_metadata.get("conversation_summary", "")
+        
         response = AgentResponse(
-            reply=result["response"],
+            reply=final_response,
             session_token=session_token,
             timestamp=result["timestamp"],
-            metadata={
-                "processed": True,
-                "worker": result["worker"],
-                "original_metadata": request.metadata
-            },
+            metadata=response_metadata,
             intent_info={
                 "intent": result["intent"],
                 "confidence": result["confidence"],
@@ -560,6 +767,14 @@ async def handle_message(request: MessageRequest):
                     timeout=6
                 )
 
+                # Pass cards in metadata for SKU extraction
+                agent_metadata = {
+                    "intent": result["intent"],
+                    "confidence": result["confidence"],
+                    "method": result["method"],
+                    "cards": result.get("cards", [])  # Include cards for SKU tracking
+                }
+                
                 requests.post(
                     "http://localhost:8000/session/update",
                     headers=base_headers,
@@ -568,11 +783,7 @@ async def handle_message(request: MessageRequest):
                         "payload": {
                             "sender": "agent",
                             "message": result["response"],
-                            "metadata": {
-                                "intent": result["intent"],
-                                "confidence": result["confidence"],
-                                "method": result["method"]
-                            }
+                            "metadata": agent_metadata
                         }
                     },
                     timeout=6
