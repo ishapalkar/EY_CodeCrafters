@@ -74,6 +74,13 @@ const KioskChat = () => {
     } catch (error) {
       console.error('Failed to fetch loyalty info:', error);
       setLoyaltyPoints(0);
+      setLoyaltyTier('Bronze');
+    }
+  };
+
+  const findFeaturedCard = () => {
+    // Check most recent messages first
+    for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i];
       if (m?.cards && m.cards.length > 0) return m.cards[0];
     }
@@ -89,74 +96,86 @@ const KioskChat = () => {
   };
 
   const FeaturedProductBlock = ({ messages: _msgs, sessionInfo: _session }) => {
-    const card = findFeaturedCard();
-    if (!card || !showFeatured) return null;
-    const featuredImage = resolveCardImage(card);
+    try {
+      const card = findFeaturedCard();
+      if (!card || !showFeatured) return null;
+      
+      // Defensive checks for card object
+      if (typeof card !== 'object' || !card.name) {
+        console.warn('[FeaturedProductBlock] Invalid card object:', card);
+        return null;
+      }
+      
+      const featuredImage = resolveCardImage(card);
 
-    return (
-      <div className="mb-6 px-4">
-        <div className="relative bg-gradient-to-br from-white to-gray-50 rounded-2xl shadow-lg border border-gray-200 p-4 max-w-md">
-          <button onClick={() => setShowFeatured(false)} className="absolute top-3 right-3 p-1 rounded hover:bg-gray-100">
-            <X className="w-4 h-4 text-gray-500" />
-          </button>
-          <p className="text-sm font-semibold text-gray-600 mb-3">FEATURED PRODUCT</p>
-          <div className="flex gap-4 items-center">
-            {featuredImage ? (
-              <img src={featuredImage} alt={card.name} className="w-28 h-28 object-cover rounded-lg" onError={(e)=>e.target.style.display='none'} />
-            ) : (
-              <div className="w-28 h-28 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex items-center justify-center">
-                <ShoppingBag className="w-10 h-10 text-gray-400" />
-              </div>
-            )}
-            <div className="flex-1">
-              <a href={`/products/${card.sku}`} className="font-semibold text-sm text-blue-600 hover:text-blue-800 underline cursor-pointer">
-                {card.name}
-              </a>
-              {card.price && <p className="text-sm font-bold text-green-600 mt-1">₹{card.price}</p>}
-              <div className="mt-2 text-xs text-gray-500">
-                {card.personalized_reason ? (
-                  <>
-                    {card.personalized_reason.length > 120 && !expandedCards.has('featured')
-                      ? `${card.personalized_reason.slice(0,110)}... `
-                      : card.personalized_reason}
-                    {card.personalized_reason.length > 120 && (
-                      <button
-                        onClick={(e) => {
-                          e.preventDefault();
-                          toggleExpandCard('featured');
-                        }}
-                        className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
-                      >
-                        {expandedCards.has('featured') ? 'Show less' : 'Show more'}
-                      </button>
-                    )}
-                  </>
-                ) : card.description ? (
-                  <>
-                    {card.description.length > 120 && !expandedCards.has('featured')
-                      ? `${card.description.slice(0,110)}... `
-                      : card.description}
-                    {card.description.length > 120 && (
-                      <button
-                        onClick={(e) => {
-                          e.preventDefault();
-                          toggleExpandCard('featured');
-                        }}
-                        className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
-                      >
-                        {expandedCards.has('featured') ? 'Show less' : 'Show more'}
-                      </button>
-                    )}
-                  </>
-                ) : (
-                  <span className="text-gray-400">Top trending for you</span>
-                )}
+      return (
+        <div className="mb-6 px-4">
+          <div className="relative bg-gradient-to-br from-white to-gray-50 rounded-2xl shadow-lg border border-gray-200 p-4 max-w-md">
+            <button onClick={() => setShowFeatured(false)} className="absolute top-3 right-3 p-1 rounded hover:bg-gray-100">
+              <X className="w-4 h-4 text-gray-500" />
+            </button>
+            <p className="text-sm font-semibold text-gray-600 mb-3">FEATURED PRODUCT</p>
+            <div className="flex gap-4 items-center">
+              {featuredImage ? (
+                <img src={featuredImage} alt={card.name || 'Product'} className="w-28 h-28 object-cover rounded-lg" onError={(e)=>e.target.style.display='none'} />
+              ) : (
+                <div className="w-28 h-28 bg-gradient-to-br from-gray-100 to-gray-200 rounded-lg flex items-center justify-center">
+                  <ShoppingBag className="w-10 h-10 text-gray-400" />
+                </div>
+              )}
+              <div className="flex-1">
+                <a href={`/products/${card.sku || ''}`} className="font-semibold text-sm text-blue-600 hover:text-blue-800 underline cursor-pointer">
+                  {card.name || 'Product'}
+                </a>
+                {card.price && <p className="text-sm font-bold text-green-600 mt-1">₹{card.price}</p>}
+                <div className="mt-2 text-xs text-gray-500">
+                  {card.personalized_reason ? (
+                    <>
+                      {card.personalized_reason.length > 120 && !expandedCards.has('featured')
+                        ? `${card.personalized_reason.slice(0,110)}... `
+                        : card.personalized_reason}
+                      {card.personalized_reason.length > 120 && (
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            toggleExpandCard('featured');
+                          }}
+                          className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
+                        >
+                          {expandedCards.has('featured') ? 'Show less' : 'Show more'}
+                        </button>
+                      )}
+                    </>
+                  ) : card.description ? (
+                    <>
+                      {card.description.length > 120 && !expandedCards.has('featured')
+                        ? `${card.description.slice(0,110)}... `
+                        : card.description}
+                      {card.description.length > 120 && (
+                        <button
+                          onClick={(e) => {
+                            e.preventDefault();
+                            toggleExpandCard('featured');
+                          }}
+                          className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
+                        >
+                          {expandedCards.has('featured') ? 'Show less' : 'Show more'}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <span className="text-gray-400">Top trending for you</span>
+                  )}
+                </div>
               </div>
             </div>
           </div>
         </div>
-      </div>
-    );
+      );
+    } catch (error) {
+      console.error('[FeaturedProductBlock] Uncaught error:', error);
+      return null;
+    }
   };
 
   // Helper to normalize surrounding quotes from messages so we only add one pair
@@ -173,10 +192,14 @@ const KioskChat = () => {
       const profile = sessionStore.getProfile();
       const storedToken = sessionStore.getSessionToken();
 
+      console.log('[KioskChat] Starting session init:', { phone, profile: profile?.customer_id, hasToken: !!storedToken });
+
       // If no login session exists, redirect to login (but don't clear other sessions)
       if (!phone || !profile) {
-        navigate('/login', { state: { redirectTo: '/kiosk' } });
+        console.warn('[KioskChat] No phone or profile found, redirecting to login');
         setIsLoadingSession(false);
+        setIsInitializing(false);
+        navigate('/login', { state: { redirectTo: '/kiosk' } });
         return;
       }
 
@@ -203,43 +226,84 @@ const KioskChat = () => {
 
       if (storedToken) {
         try {
+          console.log('[KioskChat] Attempting to restore session with token:', storedToken.substring(0, 20) + '...');
           const restoreResp = await fetch(`${SESSION_API}/session/restore`, {
             method: 'GET',
-            headers: { 'X-Session-Token': storedToken }
+            headers: { 
+              'X-Session-Token': storedToken,
+              'X-Phone': phone || ''
+            }
           });
 
           if (restoreResp.ok) {
             const restoreData = await restoreResp.json();
+            const restoredSession = restoreData.session || {};
+            
+            // Ensure session always has proper data structure
+            if (!restoredSession.data || typeof restoredSession.data !== 'object') {
+              restoredSession.data = {
+                cart: [],
+                recent: [],
+                chat_context: [],
+                last_action: null,
+                channels: [restoredSession.channel || 'kiosk'],
+                conversation_summary: '',
+                last_recommended_skus: []
+              };
+            }
+            
+            console.log('[KioskChat] ✅ Session restored successfully:', { 
+              customer_id: restoredSession?.customer_id,
+              hasData: !!restoredSession?.data,
+              chatContextLength: restoredSession?.data?.chat_context?.length || 0
+            });
+            
             setSessionToken(storedToken);
-            setSessionInfo(restoreData.session);
+            setSessionInfo(restoredSession);
             sessionStore.setPhone(phone);
 
-            applyServerProfile(restoreData.session?.data?.customer_profile);
+            applyServerProfile(restoredSession?.data?.customer_profile);
 
-            const userId = resolveUserId(restoreData.session, profile);
-            await fetchLoyaltyDetails(userId);
+            const userId = resolveUserId(restoredSession, profile);
+            try {
+              await fetchLoyaltyDetails(userId);
+            } catch (loyaltyErr) {
+              console.warn('[KioskChat] Loyalty fetch failed (non-blocking):', loyaltyErr);
+            }
 
-            if (restoreData.session.data?.chat_context?.length) {
-              const chatMessages = restoreData.session.data.chat_context.map((msg, idx) => ({
-                id: idx + 1,
-                text: msg.message,
-                sender: msg.sender === 'user' ? 'user' : 'agent',
-                timestamp: new Date(msg.timestamp).toLocaleTimeString('en-US', {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                  hour12: true,
-                }),
-                cards: msg.metadata?.cards || [],
-              }));
-              setMessages(chatMessages);
+            if (Array.isArray(restoredSession.data?.chat_context) && restoredSession.data.chat_context.length) {
+              try {
+                const chatMessages = restoredSession.data.chat_context.map((msg, idx) => ({
+                  id: idx + 1,
+                  text: msg.message || msg.text || '',
+                  sender: msg.sender === 'user' ? 'user' : 'agent',
+                  timestamp: msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString('en-US', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true,
+                  }) : new Date().toLocaleTimeString('en-US', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    hour12: true,
+                  }),
+                  cards: (msg.metadata?.cards && Array.isArray(msg.metadata.cards)) ? msg.metadata.cards : [],
+                }));
+                setMessages(chatMessages);
+              } catch (mapErr) {
+                console.warn('[KioskChat] Failed to map chat_context to messages:', mapErr);
+                setMessages([]);
+              }
             }
             return;
+          } else {
+            console.warn('[KioskChat] Failed to restore session:', restoreResp.status, await restoreResp.text());
           }
         } catch (err) {
-          console.warn('Stored session restore failed, attempting fresh session', err);
+          console.warn('[KioskChat] Stored session restore failed, attempting fresh session', err);
         }
       }
 
+      console.log('[KioskChat] Creating new session with:', { phone, channel: 'kiosk', customer_id: profile.customer_id || profile.customerId });
       const response = await fetch(`${SESSION_API}/session/start`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -250,11 +314,20 @@ const KioskChat = () => {
         })
       });
 
+      console.log('[KioskChat] Session start response:', response.status);
+
       if (!response.ok) {
-        throw new Error('Failed to start session');
+        const errorText = await response.text();
+        console.error('[KioskChat] ❌ Session creation failed:', response.status, errorText);
+        throw new Error(`Failed to create session: ${response.status} ${errorText}`);
       }
 
       const data = await response.json();
+      console.log('[KioskChat] ✅ New session created:', { 
+        token: data.session_token?.substring(0, 20) + '...', 
+        customer_id: data.session?.customer_id 
+      });
+      
       setSessionToken(data.session_token);
       sessionStore.setSessionToken(data.session_token);
       sessionStore.setPhone(phone);
@@ -263,7 +336,11 @@ const KioskChat = () => {
       applyServerProfile(data.session?.data?.customer_profile);
 
       const userId = resolveUserId(data.session, profile);
-      await fetchLoyaltyDetails(userId);
+      try {
+        await fetchLoyaltyDetails(userId);
+      } catch (loyaltyErr) {
+        console.warn('[KioskChat] Loyalty fetch failed (non-blocking):', loyaltyErr);
+      }
 
       if (data.session.data.chat_context && data.session.data.chat_context.length > 0) {
         const chatMessages = data.session.data.chat_context.map((msg, idx) => ({
@@ -291,9 +368,12 @@ const KioskChat = () => {
         }]);
       }
     } catch (error) {
-      console.error('Session error:', error);
+      console.error('[KioskChat] ❌ Session error:', error.message, error);
+      console.error('[KioskChat] Error stack:', error.stack);
       sessionStore.clearAll();
-      alert('We could not create your session. Please log in again.');
+      setIsLoadingSession(false);
+      setIsInitializing(false);
+      alert(`We could not create your session. Please log in again.\n\nError: ${error.message}`);
       navigate('/login');
     } finally {
       setIsLoadingSession(false);
@@ -347,6 +427,19 @@ const KioskChat = () => {
       console.error('Failed to save chat message:', error);
     }
   };
+
+  // Add initialization timeout to prevent infinite loading
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (isInitializing) {
+        console.warn('[KioskChat] Session initialization timeout - forcing fallback');
+        setIsInitializing(false);
+        setIsLoadingSession(false);
+      }
+    }, 15000); // 15 second timeout
+    
+    return () => clearTimeout(timer);
+  }, [isInitializing]);
 
   // Auto-scroll to bottom
   const scrollToBottom = () => {
@@ -557,6 +650,31 @@ const KioskChat = () => {
           <p className="mt-3 text-sm text-[#6d4c41]">
             {isLoadingSession ? 'Linking your profile across channels.' : 'Verifying your login details.'}
           </p>
+          <p className="mt-4 text-xs text-[#8d6e63]">If this takes too long, please refresh the page.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Fallback: if we somehow got past initialization but have no session, show error
+  if (!sessionInfo || !sessionToken) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-red-50 to-orange-50 flex items-center justify-center p-4">
+        <div className="bg-white shadow-2xl rounded-3xl p-10 max-w-lg w-full border border-red-200 text-center">
+          <div className="inline-flex items-center justify-center w-24 h-24 rounded-full bg-red-100 text-red-600 shadow-xl">
+            <X className="w-12 h-12" />
+          </div>
+          <h2 className="mt-6 text-2xl font-bold text-red-700">Session Error</h2>
+          <p className="mt-3 text-sm text-gray-600">We couldn't load your kiosk session. Please log in again.</p>
+          <button
+            onClick={() => {
+              sessionStore.clearAll();
+              navigate('/login', { replace: true });
+            }}
+            className="mt-6 bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg transition-colors"
+          >
+            Return to Login
+          </button>
         </div>
       </div>
     );

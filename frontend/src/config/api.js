@@ -103,7 +103,13 @@ export const API_ENDPOINTS = {
   AMBIENT_COMMERCE: `${API_BASE_URL}:8017`,
   VISUAL_SEARCH_IMAGE: `${API_BASE_URL}:8017/search/image`,
   // Virtual Circles (Community Chat)
-  VIRTUAL_CIRCLES: `${API_BASE_URL}:8009`
+  VIRTUAL_CIRCLES: `${API_BASE_URL}:8009`,
+  
+  // Sales Agent Memory Endpoints (Port 8000)
+  SESSION_CONTEXT: `${API_BASE_URL}:8000/session/{id}/context`,
+  SESSION_SUMMARY: `${API_BASE_URL}:8000/session/{id}/summary`,
+  SESSION_RECOMMENDATIONS: `${API_BASE_URL}:8000/session/{id}/recommendations`,
+  SESSION_CART: `${API_BASE_URL}:8000/session/{id}/cart`,
 };
 
 // Helper function for API calls with error handling

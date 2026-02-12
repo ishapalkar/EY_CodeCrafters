@@ -139,7 +139,7 @@ const LoginPage = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-orange-50 via-yellow-50 to-red-50">
       <Navbar />
-      <div className="pt-20 flex items-center justify-center px-4 pb-10">
+      <div className="pt-32 flex items-center justify-center px-4 pb-10">
         <div className="w-full max-w-2xl bg-white/95 backdrop-blur shadow-xl rounded-2xl border border-red-100 p-8">
           <h1 className="text-3xl font-semibold text-red-700 text-center mb-4">
             {mode === 'login' ? 'Customer Login' : 'Create Account'}
