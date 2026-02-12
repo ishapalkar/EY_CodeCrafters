@@ -1069,6 +1069,11 @@ const Chat = () => {
                           sku: item?.sku || '',
                           name: item?.name || '',
                           reason: item?.reason || '',
+                          image_url: item?.image_url || item?.image || '',
+                          price: item?.price || 0,
+                          brand: item?.brand || '',
+                          rating: item?.rating || 0,
+                          personalized_reason: item?.personalized_reason || item?.reason || '',
                         }))
                         .filter((item) => item.sku || item.name || item.reason)
                     : [];
@@ -2193,28 +2198,28 @@ const Chat = () => {
               {message.stylistRecommendations && (
                 <div className="mt-3 space-y-3">
                   {/* Header */}
-                  <div className="border border-indigo-200 bg-indigo-50 rounded-lg p-3">
-                    <div className="text-xs font-semibold uppercase tracking-wide text-indigo-700">Stylist Picks</div>
-                    <p className="text-sm text-indigo-900 mt-1">
+                  <div className="border-l-4 border-[#25d366] bg-[#f0f9ff] rounded-r-lg p-3 mb-2">
+                    <div className="text-xs font-semibold uppercase tracking-wide text-[#128c7e]">Stylist Picks</div>
+                    <p className="text-sm text-[#075e54] mt-1">
                       {message.stylistRecommendations.purchasedProduct?.name
                         ? `Ideas to style your ${message.stylistRecommendations.purchasedProduct.name}.`
                         : 'Ideas to style your new purchase.'}
                     </p>
                   </div>
 
-                  {/* Recommendation Product Cards - Same style as ambient_commerce */}
+                  {/* Recommendation Product Cards - WhatsApp style */}
                   {message.stylistRecommendations.recommendedProducts?.length > 0 && (
-                    <div className="space-y-3">
+                    <div className="space-y-2">
                       {message.stylistRecommendations.recommendedProducts.map((item, idx) => (
-                        <div key={`${message.id}-stylist-${idx}`} className="border border-gray-300 rounded-xl overflow-hidden bg-gradient-to-br from-white to-gray-50 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
-                          <div className="flex gap-4 p-4">
-                            {/* Premium Product Image - Large */}
+                        <div key={`${message.id}-stylist-${idx}`} className="bg-[#e8f5e9] rounded-2xl overflow-hidden hover:shadow-lg transition-shadow duration-200 border border-[#a5d6a7]">
+                          <div className="flex gap-3 p-3">
+                            {/* Premium Product Image */}
                             {item.image_url && (
-                              <div className="flex-shrink-0 w-32 h-32 rounded-lg overflow-hidden bg-white shadow-md">
+                              <div className="flex-shrink-0 w-24 h-24 rounded-lg overflow-hidden bg-white shadow-sm border border-[#c8e6c9]">
                                 <img 
                                   src={resolveImageUrl(item.image_url)} 
                                   alt={item.name}
-                                  className="w-full h-full object-cover hover:scale-110 transition-transform duration-300"
+                                  className="w-full h-full object-cover hover:scale-105 transition-transform duration-300"
                                   onError={(e) => {
                                     e.target.style.display = 'none';
                                   }}
@@ -2226,17 +2231,17 @@ const Chat = () => {
                             <div className="flex-1 min-w-0">
                               <div className="flex items-start justify-between gap-2">
                                 <div className="flex-1">
-                                  <h4 className="font-bold text-base text-gray-900 leading-tight">
+                                  <h4 className="font-bold text-sm text-[#075e54] leading-tight">
                                     {item.name || `Recommendation ${idx + 1}`}
                                   </h4>
                                   {item.brand && (
-                                    <p className="text-xs text-gray-500 mt-1 font-mono">{item.brand}</p>
+                                    <p className="text-xs text-[#566573] mt-1 font-medium">{item.brand}</p>
                                   )}
                                 </div>
                                 {item.price && (
-                                  <div className="text-right">
-                                    <p className="text-lg font-bold text-emerald-600">₹{item.price.toLocaleString()}</p>
-                                    <p className="text-[10px] text-gray-500">Inclusive of taxes</p>
+                                  <div className="text-right flex-shrink-0">
+                                    <p className="text-base font-bold text-[#25d366]">₹{item.price.toLocaleString()}</p>
+                                    <p className="text-[10px] text-[#566573]">incl. tax</p>
                                   </div>
                                 )}
                               </div>
@@ -2244,23 +2249,19 @@ const Chat = () => {
                               {/* Rating Badge */}
                               {item.rating && (
                                 <div className="mt-2">
-                                  <span className="inline-block bg-yellow-100 text-yellow-800 text-xs font-semibold px-2 py-1 rounded-full">
-                                    ⭐ {item.rating} stars
+                                  <span className="inline-block bg-[#fff9c4] text-[#f57f17] text-xs font-semibold px-2 py-1 rounded-full">
+                                    ⭐ {item.rating}
                                   </span>
                                 </div>
                               )}
                               
                               {/* Personalized Reason */}
                               {(item.personalized_reason || item.gift_message) && (
-                                <div className="mt-3 text-sm text-gray-700 leading-relaxed">
-                                  <div className="italic bg-indigo-50/50 border-l-4 border-indigo-400 px-3 py-2 rounded-r-lg">
-                                    <p className="text-xs">
-                                      {(item.personalized_reason || item.gift_message).length > 180 
-                                        ? `${(item.personalized_reason || item.gift_message).slice(0, 170)}...` 
-                                        : (item.personalized_reason || item.gift_message)}
-                                    </p>
-                                  </div>
-                                </div>
+                                <p className="mt-2 text-xs text-[#556571] italic leading-relaxed">
+                                  {(item.personalized_reason || item.gift_message).length > 100 
+                                    ? `${(item.personalized_reason || item.gift_message).slice(0, 95)}...` 
+                                    : (item.personalized_reason || item.gift_message)}
+                                </p>
                               )}
                             </div>
                           </div>
@@ -2271,9 +2272,9 @@ const Chat = () => {
 
                   {/* Styling Tips - if present */}
                   {message.stylistRecommendations.stylingTips?.length > 0 && (
-                    <div className="border border-indigo-200 bg-indigo-50 rounded-lg p-3">
-                      <div className="text-xs font-semibold text-indigo-800 uppercase tracking-wide">Styling Tips</div>
-                      <ul className="mt-2 list-disc list-inside text-xs text-indigo-900 space-y-1">
+                    <div className="border-l-4 border-[#25d366] bg-[#f0f9ff] rounded-r-lg p-3 mt-2">
+                      <div className="text-xs font-semibold text-[#128c7e] uppercase tracking-wide">Styling Tips</div>
+                      <ul className="mt-2 list-disc list-inside text-xs text-[#075e54] space-y-1">
                         {message.stylistRecommendations.stylingTips.map((tip, idx) => (
                           <li key={`${message.id}-stylist-tip-${idx}`}>{tip}</li>
                         ))}
@@ -2285,9 +2286,9 @@ const Chat = () => {
               )}
 
               {message.postPurchaseOptions && (
-                <div className="mt-3 border border-emerald-200 bg-emerald-50 rounded-lg p-3">
-                  <div className="text-xs font-semibold uppercase tracking-wide text-emerald-700">Post-Purchase Support</div>
-                  <p className="text-sm text-emerald-900 mt-1">
+                <div className="mt-3 border-l-4 border-[#25d366] bg-[#f0f9ff] rounded-r-lg p-3">
+                  <div className="text-xs font-semibold uppercase tracking-wide text-[#128c7e]">Post-Purchase Support</div>
+                  <p className="text-sm text-[#075e54] mt-1">
                     {message.postPurchaseOptions.productName
                       ? `Need help with ${message.postPurchaseOptions.productName}? Choose an option below.`
                       : 'Need help after your purchase? Pick an option below.'}
@@ -2298,10 +2299,10 @@ const Chat = () => {
                         key={action.key}
                         type="button"
                         onClick={() => openSupportPanel(action.key, message.postPurchaseOptions)}
-                        className="text-left px-3 py-2 bg-white border border-emerald-200 rounded-lg hover:bg-emerald-100 transition-colors"
+                        className="text-left px-3 py-2 bg-white border border-[#a5d6a7] rounded-lg hover:bg-[#e8f5e9] transition-colors"
                       >
-                        <div className="text-sm font-semibold text-emerald-800">{`${action.emoji} ${action.label}`}</div>
-                        <div className="text-xs text-emerald-700 mt-1">{action.caption}</div>
+                        <div className="text-sm font-semibold text-[#128c7e]">{`${action.emoji} ${action.label}`}</div>
+                        <div className="text-xs text-[#556571] mt-1">{action.caption}</div>
                       </button>
                     ))}
                   </div>

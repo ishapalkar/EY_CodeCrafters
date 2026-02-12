@@ -761,6 +761,7 @@ async def call_recommendation_worker(state: SalesAgentState) -> SalesAgentState:
                     "sku": item.get("sku"),
                     "name": item.get("name"),
                     "price": item.get("price"),
+                    "image": item.get("image_url") or item.get("image", ""),
                     "description": item.get("personalized_reason", ""),
                     "personalized_reason": item.get("personalized_reason", ""),
                     "gift_message": item.get("gift_message") if isinstance(item, dict) else None,

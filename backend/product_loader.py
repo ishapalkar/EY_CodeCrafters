@@ -142,15 +142,18 @@ class ProductLoader:
     def _get_from_supabase(self, sku: Optional[str] = None) -> List[Dict[str, Any]]:
         """Fetch products from Supabase."""
         if not self.supabase_client:
+            logger.warning("[ProductLoader] Supabase client not available")
             return []
         
         try:
             if sku:
                 response = self.supabase_client.table("products").select("*").eq("sku", sku).execute()
             else:
-                response = self.supabase_client.table("products").select("*").execute()
+                # Fetch all products with explicit limit (Supabase defaults to 1000)
+                response = self.supabase_client.table("products").select("*").limit(10000).execute()
             
             products = response.data if hasattr(response, 'data') else []
+            logger.info(f"[ProductLoader] Supabase returned {len(products)} products")
             return [self._normalize_product(p, source="supabase") for p in products]
         except Exception as e:
             logger.warning(f"Error fetching from Supabase: {e}")
@@ -192,11 +195,13 @@ class ProductLoader:
         # Try Supabase first
         supabase_products = self._get_from_supabase()
         if supabase_products:
+            logger.info(f"[ProductLoader] Got {len(supabase_products)} products from Supabase, returning {limit} from offset {offset}")
             return supabase_products[offset : offset + limit]
         
         # Fallback to CSV
         csv_products = self._get_from_csv()
         if csv_products:
+            logger.info(f"[ProductLoader] Got {len(csv_products)} products from CSV, returning {limit} from offset {offset}")
             return csv_products[offset : offset + limit]
         
         logger.warning("No products available")
@@ -204,13 +209,13 @@ class ProductLoader:
     
     def get_products_by_category(self, category: str, limit: int = 50) -> List[Dict[str, Any]]:
         """Get products by category."""
-        all_products = self.get_all_products(limit=1000)
+        all_products = self.get_all_products(limit=5000)
         filtered = [p for p in all_products if p.get("category", "").lower() == category.lower()]
         return filtered[:limit]
     
     def search_products(self, query: str, limit: int = 20) -> List[Dict[str, Any]]:
         """Search products by name."""
-        all_products = self.get_all_products(limit=1000)
+        all_products = self.get_all_products(limit=5000)
         query_lower = query.lower()
         filtered = [p for p in all_products if query_lower in p.get("name", "").lower()]
         return filtered[:limit]
