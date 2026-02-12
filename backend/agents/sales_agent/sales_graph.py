@@ -98,8 +98,8 @@ WORKER_SERVICES = {
     "fulfillment": "http://localhost:8004",
     "post_purchase": "http://localhost:8005",
     "stylist": "http://localhost:8006",
-    "virtual_circles": "http://localhost:8007",  # Virtual Circles (Community Chat) - now on correct port  # Virtual Circles (Community Chat)
-    "ambient_commerce": os.getenv("AMBIENT_COMMERCE_URL", "http://localhost:8007"),
+    "virtual_circles": "http://localhost:8007",  # Virtual Circles (Community Chat)
+    "ambient_commerce": os.getenv("AMBIENT_COMMERCE_URL", "http://localhost:8017"),
 }
 
 WORKER_TIMEOUT_SECONDS = int(os.getenv("SALES_AGENT_WORKER_TIMEOUT", "25"))

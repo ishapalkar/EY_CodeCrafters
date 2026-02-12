@@ -15,6 +15,7 @@ import shutil
 from pathlib import Path
 from datetime import datetime
 import requests
+import re
 
 from feature_extractor import FeatureExtractor
 from index_builder import FAISSIndexBuilder
@@ -147,9 +148,53 @@ class IndexInfoResponse(BaseModel):
 # HELPER FUNCTIONS
 # ==========================================
 
+def infer_color_from_name(product_name: str) -> Optional[str]:
+    if not product_name:
+        return None
+
+    color_terms = [
+        "black", "white", "red", "blue", "green", "yellow", "pink", "purple",
+        "grey", "gray", "navy", "brown", "beige", "tan", "orange", "silver",
+        "gold", "maroon", "olive", "teal", "turquoise", "coral", "violet",
+        "indigo", "lavender", "cream", "off white", "off-white", "charcoal",
+        "khaki", "mustard", "peach", "mint", "burgundy", "dandelion",
+    ]
+
+    matches = []
+    for term in color_terms:
+        pattern = r"\b" + re.escape(term).replace("\\ ", r"[\\s-]+") + r"\b"
+        found = re.search(pattern, product_name, flags=re.IGNORECASE)
+        if found:
+            matches.append((found.start(), term))
+
+    if not matches:
+        return None
+
+    matches.sort(key=lambda item: item[0])
+    ordered = []
+    for _, term in matches:
+        normalized = " ".join(word.capitalize() for word in term.replace("-", " ").split())
+        if normalized not in ordered:
+            ordered.append(normalized)
+
+    return " ".join(ordered)
+
+
+def normalize_color(raw_color: Optional[str], product_name: str) -> str:
+    if raw_color is None:
+        inferred = infer_color_from_name(product_name)
+        return inferred if inferred else "Neutral"
+
+    color_text = str(raw_color).strip()
+    if color_text.lower() in {"", "unknown", "n/a", "na", "none", "null", "nan"}:
+        inferred = infer_color_from_name(product_name)
+        return inferred if inferred else "Neutral"
+
+    return color_text
+
 def generate_reasoning(match: Dict, all_matches: List[Dict], similarity_threshold: float) -> str:
     """
-    Generate human-readable reasoning for the match.
+    Generate human-readable reasoning for the match using Groq API for premium, unique descriptions.
     
     Args:
         match: The matched product
@@ -162,31 +207,52 @@ def generate_reasoning(match: Dict, all_matches: List[Dict], similarity_threshol
     score = match['similarity_score']
     brand = match['brand']
     product = match['product_name']
-    color = match['color']
+    color = normalize_color(match.get('color'), product)
+    material = match.get('material', 'premium fabric')
+    subcategory = match.get('subcategory', 'essentials')
+    price = match.get('price', 0)
     
     groq_api_key = os.getenv("GROQ_API_KEY")
     groq_model = os.getenv("GROQ_MODEL", "llama-3.1-70b-versatile")
-    tone_variants = [
-        "premium",
-        "everyday",
-        "value",
-        "minimal",
+    
+    # Style variations for more diverse outputs
+    style_approaches = [
+        "luxury boutique",
+        "trend-focused",
+        "classic elegance",
+        "modern minimalist",
+        "lifestyle brand",
+        "premium quality"
     ]
-    tone_hint = tone_variants[hash(product) % len(tone_variants)] if product else "everyday"
+    
+    # Use a combination of product attributes for randomization to ensure uniqueness
+    seed = hash(f"{product}{color}{material}{price}")
+    style = style_approaches[abs(seed) % len(style_approaches)]
+    
+    # Additional randomization: vary temperature and approach
+    temp_variation = 0.85 + (abs(seed % 100) / 500.0)  # 0.85 to 1.05
 
     if groq_api_key:
         try:
             prompt = (
-                "You are a retail stylist. Write 3-4 persuasive sentences to help a customer buy this item. "
-                "Rules: include the similarity score as a percentage; do NOT mention low match or showing multiple options; "
-                "use **bold** for 2-3 key phrases (brand, product, material or color); keep it convincing and concise.\n\n"
-                f"Product: {brand} {product}\n"
-                f"Color: {color}\n"
-                f"Material: {match.get('material', 'Unknown')}\n"
-                f"Subcategory: {match.get('subcategory', 'Unknown')}\n"
-                f"Price: {match.get('price', 'Unknown')}\n"
-                f"Similarity score: {score:.2%}\n"
-                f"Tone: {tone_hint}"
+                f"You are an expert {style} stylist writing compelling product copy. "
+                f"Craft a premium, personalized 3-4 sentence description for this item that makes the customer feel this is THE perfect match.\n\n"
+                f"Product Details:\n"
+                f"• Item: {brand} {product}\n"
+                f"• Color: {color}\n"
+                f"• Material: {material}\n"
+                f"• Category: {subcategory}\n"
+                f"• Price: ₹{price}\n"
+                f"• Visual Match: {score:.1%}\n\n"
+                f"Guidelines:\n"
+                f"- Start by highlighting what makes THIS specific product special\n"
+                f"- Emphasize the **{brand}** heritage and **{color}** appeal naturally\n"
+                f"- Weave in lifestyle benefits and styling versatility\n"
+                f"- Use 1-2 **bold phrases** for key features\n"
+                f"- Sound exclusive yet approachable\n"
+                f"- DO NOT mention 'match score' or 'similar to your image' - focus on product itself\n"
+                f"- Make it feel personally curated for them\n"
+                f"- Each product description must be UNIQUE - never repeat patterns"
             )
 
             response = requests.post(
@@ -198,11 +264,14 @@ def generate_reasoning(match: Dict, all_matches: List[Dict], similarity_threshol
                 json={
                     "model": groq_model,
                     "messages": [
-                        {"role": "system", "content": "You are a helpful retail copywriter."},
+                        {"role": "system", "content": f"You are a premium {style} fashion consultant known for personalized, compelling product storytelling."},
                         {"role": "user", "content": prompt},
                     ],
-                    "temperature": 0.7,
-                    "max_tokens": 120,
+                    "temperature": temp_variation,
+                    "max_tokens": 150,
+                    "top_p": 0.95,
+                    "frequency_penalty": 0.6,
+                    "presence_penalty": 0.4,
                 },
                 timeout=15,
             )
@@ -211,46 +280,51 @@ def generate_reasoning(match: Dict, all_matches: List[Dict], similarity_threshol
             content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
             if content:
                 return content.strip()
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Groq API failed for {product}: {e}")
 
-    reasoning_parts = []
-
-    # Similarity highlight
-    reasoning_parts.append(f"**Similarity score:** {score:.2%}.")
-
-    # Match description
-    core_line = f"Visually closest to the **{brand} {product}** in **{color}**."
-    reasoning_parts.append(core_line)
-
-    # Visual features with personalization
-    visual_cues = []
-    if 'subcategory' in match:
-        visual_cues.append(f"**{match['subcategory']}** style")
-    if color != "Unknown":
-        visual_cues.append(f"**{color}** shade")
-    if match.get('material') and match['material'] != "Unknown":
-        visual_cues.append(f"**{match['material']}** material")
-
-    if visual_cues:
-        reasoning_parts.append(
-            f"If you prefer {', '.join(visual_cues)}, this option will feel right instantly."
-        )
-
-    if brand and brand != "Unknown":
-        reasoning_parts.append(f"A solid pick if **{brand}** is already on your list.")
-
-    # Persuasive, varied close per option
-    closing_hooks = [
-        "Easy to style and ready for everyday use.",
-        "A clean, versatile choice that elevates your look.",
-        "Feels premium in hand—worth adding to cart today.",
-        "Great value for the quality and finish.",
+    # Premium fallback when Groq API is unavailable - focus on product benefits only
+    # NO technical details, NO similarity scores - pure sales copy
+    
+    # Opening hooks that highlight the product
+    opening_variants = [
+        f"Discover the **{brand} {product}** – a standout piece that brings effortless style to your wardrobe.",
+        f"Meet the **{brand} {product}** – crafted for those who appreciate quality and design.",
+        f"The **{brand} {product}** is your go-to choice when you want to make a confident style statement.",
+        f"Elevate your look with the **{brand} {product}** – where comfort meets contemporary design.",
+        f"Introducing the **{brand} {product}** – designed to complement your unique style perfectly.",
     ]
-    hook = closing_hooks[hash(product) % len(closing_hooks)] if product else closing_hooks[0]
-    reasoning_parts.append(hook)
-
-    return " ".join(reasoning_parts)
+    
+    # Color/material highlights
+    feature_variants = [
+        f"The **{color}** shade adds a touch of sophistication, while the **{material}** ensures lasting comfort.",
+        f"Beautifully finished in **{color}**, this piece features premium **{material}** for all-day wearability.",
+        f"The rich **{color}** tone paired with quality **{material}** creates a timeless appeal.",
+        f"Styled in an elegant **{color}** hue with carefully selected **{material}** – built to last.",
+        f"A stunning **{color}** color combined with premium **{material}** makes this a wardrobe essential.",
+    ]
+    
+    # Closing CTAs
+    closing_variants = [
+        "Perfect for both everyday wear and special occasions – add it to your collection today.",
+        "Versatile enough for any look, refined enough to make you stand out.",
+        "This is the piece you'll reach for again and again. Don't miss out.",
+        "Ready to elevate your style game? This is your perfect match.",
+        "A smart investment in quality and style that you'll love wearing.",
+    ]
+    
+    # Build the description using varied combinations
+    seed_val = abs(hash(f"{product}{color}"))
+    opening = opening_variants[seed_val % len(opening_variants)]
+    features = feature_variants[(seed_val // 10) % len(feature_variants)]
+    closing = closing_variants[(seed_val // 100) % len(closing_variants)]
+    
+    # Only mention brand reputation if it's a known brand (not "Unknown")
+    if brand and brand != "Unknown":
+        brand_note = f" **{brand}** brings decades of craftsmanship and style innovation to every piece."
+        return f"{opening} {features}{brand_note} {closing}"
+    
+    return f"{opening} {features} {closing}"
 
 
 def select_best_match_with_brand_preference(matches: List[Dict], preferred_brand: Optional[str] = None) -> Dict:
@@ -577,7 +651,7 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser(description="Ambient Commerce Integrator Agent")
     parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
-    parser.add_argument("--port", type=int, default=8007, help="Port to bind to")
+    parser.add_argument("--port", type=int, default=8017, help="Port to bind to")
     parser.add_argument("--reload", action="store_true", help="Enable auto-reload")
     
     args = parser.parse_args()

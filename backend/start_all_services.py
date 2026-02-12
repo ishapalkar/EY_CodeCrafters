@@ -24,6 +24,7 @@ SERVICES = [
     ("Stylist", "agents/worker_agents/stylist", 8006),
     ("Virtual Circles", "agents/worker_agents/virtual_circles", 8007),
     ("Recommendation", "agents/worker_agents/recommendation", 8008),
+    ("Ambient Commerce", "agents/worker_agents/ambient_commerce", 8017),
     ("Data API", "data_api.py", 8009),
     ("Sales Agent", "agents/sales_agent", 8010),
     ("Telegram", "agents/worker_agents/telegram", 8011),

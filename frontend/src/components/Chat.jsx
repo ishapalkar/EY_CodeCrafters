@@ -16,6 +16,7 @@ import {
   CheckCircle,
   ImagePlus,
   ShoppingCart,
+  Package,
 } from 'lucide-react';
 
 import { useCart } from '@/contexts/CartContext.jsx';
@@ -1565,7 +1566,6 @@ const Chat = () => {
       const bestMatch = response.best_match;
       const alternatives = response.alternative_matches || [];
       const cards = [];
-      const gallery = [];
 
       if (bestMatch) {
         cards.push({
@@ -1576,9 +1576,6 @@ const Chat = () => {
           image: bestMatch.image_url || '',
           description: bestMatch.reasoning || '',
         });
-        if (bestMatch.image_url) {
-          gallery.push(bestMatch.image_url);
-        }
       }
 
       alternatives.forEach((match) => {
@@ -1590,16 +1587,13 @@ const Chat = () => {
           image: match.image_url || '',
           description: match.reasoning || '',
         });
-        if (match.image_url) {
-          gallery.push(match.image_url);
-        }
       });
 
       const intro = bestMatch
-        ? `Here’s the closest visual match I found: ${bestMatch.brand || ''} ${bestMatch.product_name || ''}.`
-        : 'Here are the closest matches I found from your image.';
+        ? `✨ **Perfect Match!** I found this stunning ${bestMatch.brand || ''} piece: **${bestMatch.product_name || ''}**. Check out the full details below along with other curated options.`
+        : '✨ **Visual Search Complete!** I have handpicked these premium pieces based on your image. Each one is curated to match your style preferences.';
 
-      await appendAgentMessage(intro, { metadata: { cards }, messageProps: { cards, imageGallery: gallery } });
+      await appendAgentMessage(intro, { metadata: { cards }, messageProps: { cards } });
     } catch (error) {
       console.error('Visual search failed:', error);
       await appendAgentMessage('Something went wrong while searching by image. Please try again.');
@@ -1930,6 +1924,13 @@ const Chat = () => {
               </span>
             )}
           </button>
+          <button
+            onClick={() => navigate('/orders')}
+            className="hover:bg-[#017561] p-2 rounded-full transition-colors"
+            title="Your Orders"
+          >
+            <Package className="w-5 h-5" />
+          </button>
           <button className="hover:bg-[#017561] p-2 rounded-full transition-colors">
             <Phone className="w-5 h-5" />
           </button>
@@ -2006,83 +2007,71 @@ const Chat = () => {
               </div>
 
               {message.imagePreview && (
-                <div className="mt-3">
-                  <img
-                    src={message.imagePreview}
-                    alt="Uploaded preview"
-                    className="w-40 h-40 object-cover rounded-lg border border-gray-200"
-                  />
-                </div>
-              )}
-
-              {message.imageGallery?.length > 0 && (
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {message.imageGallery.map((url, index) => (
+                <div className="mt-4 relative group">
+                  <div className="relative overflow-hidden rounded-xl shadow-lg border-2 border-indigo-200 bg-gradient-to-br from-indigo-50 to-purple-50 p-2">
                     <img
-                      key={`${url}-${index}`}
-                      src={url}
-                      alt="Suggested product"
-                      className="w-20 h-20 object-cover rounded-lg border border-gray-200"
+                      src={message.imagePreview}
+                      alt="Your uploaded image"
+                      className="w-full max-w-xs mx-auto object-cover rounded-lg shadow-md transform transition-transform duration-300 group-hover:scale-105"
                     />
-                  ))}
+                    <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-sm px-3 py-1 rounded-full text-xs font-semibold text-indigo-700 shadow-md">
+                      📸 Your Image
+                    </div>
+                  </div>
+                  <div className="mt-2 text-center text-xs text-gray-500 italic">
+                    Searching our collection for similar styles...
+                  </div>
                 </div>
               )}
               
               {/* Product Cards */}
               {message.cards && message.cards.length > 0 && (
-                <div className="mt-3 space-y-2">
+                <div className="mt-3 space-y-3">
                   {message.cards.map((card, idx) => (
-                    <div 
-                      key={idx} 
-                      className="border border-gray-200 rounded-lg p-3 bg-gray-50 hover:bg-gray-100 transition-colors"
-                    >
-                      <div className="flex gap-3">
-                        {/* Product Image */}
-                        {(card.image || card.image_url) && (
-                          <div className="w-20 h-20 flex-shrink-0 rounded-lg overflow-hidden bg-white border border-gray-200">
-                            <img 
-                              src={card.image || card.image_url} 
+                    <div key={idx} className="border border-gray-300 rounded-xl overflow-hidden bg-gradient-to-br from-white to-gray-50 hover:shadow-xl transition-all duration-300 transform hover:-translate-y-1">
+                      <div className="flex gap-4 p-4">
+                        {/* Premium Product Image */}
+                        {card.image && (
+                          <div className="flex-shrink-0 w-32 h-32 rounded-lg overflow-hidden bg-white shadow-md">
+                            <img
+                              src={card.image.startsWith('http') ? card.image : `http://localhost:8007/images/${card.image.split('/').pop()}`}
                               alt={card.name}
-                              className="w-full h-full object-cover"
+                              className="w-full h-full object-cover hover:scale-110 transition-transform duration-300"
                               onError={(e) => {
                                 e.target.style.display = 'none';
                               }}
                             />
                           </div>
                         )}
-                        <div className="flex-1">
-                          {/* Product Title - Only this has a link */}
-                          <a
-                            href={card.sku ? `/products/${card.sku}` : '#'}
-                            onClick={(e) => {
-                              if (!card.sku) e.preventDefault();
-                            }}
-                            className="font-semibold text-sm text-gray-900 hover:text-[#00796b] hover:underline cursor-pointer"
-                          >
-                            {card.name}
-                          </a>
-                          <p className="text-xs text-gray-600 mt-1">{card.sku}</p>
-                          {card.price && (
-                            <p className="text-sm font-bold text-green-600 mt-1">₹{card.price}</p>
-                          )}
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1">
+                              <h4 className="font-bold text-base text-gray-900 leading-tight">{card.name}</h4>
+                              <p className="text-xs text-gray-500 mt-1 font-mono">{card.sku}</p>
+                            </div>
+                            {card.price && (
+                              <div className="text-right">
+                                <p className="text-lg font-bold text-emerald-600">₹{card.price.toLocaleString()}</p>
+                                <p className="text-[10px] text-gray-500">Inclusive of taxes</p>
+                              </div>
+                            )}
+                          </div>
+                          
                           {/* Show personalized reason AND gift message (if present). Fall back to description only if neither exists. */}
                           {(card.personalized_reason || card.gift_message || card.description) && (
-                            <div className="mt-2 text-xs text-gray-500">
+                            <div className="mt-3 text-sm text-gray-700 leading-relaxed">
                               {/* Personalized reason (primary) */}
                               {card.personalized_reason && (
-                                <div className="mb-2">
+                                <div className="mb-3 italic bg-indigo-50/50 border-l-4 border-indigo-400 px-3 py-2 rounded-r-lg">
                                   {card.personalized_reason.length > 240 && !expandedCards.has(`${message.id}-${idx}-pr`)
                                     ? renderMessageText(`${card.personalized_reason.slice(0, 220)}... `)
                                     : renderMessageText(card.personalized_reason)}
                                   {card.personalized_reason.length > 240 && (
                                     <button
-                                      onClick={(e) => {
-                                        e.preventDefault();
-                                        toggleExpandCard(`${message.id}-${idx}-pr`);
-                                      }}
-                                      className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
+                                      onClick={() => toggleExpandCard(`${message.id}-${idx}-pr`)}
+                                      className="ml-1 text-xs text-indigo-600 font-semibold hover:underline"
                                     >
-                                      {expandedCards.has(`${message.id}-${idx}-pr`) ? 'Learn less' : 'Learn more'}
+                                      {expandedCards.has(`${message.id}-${idx}-pr`) ? 'Show less' : 'Read more'}
                                     </button>
                                   )}
                                 </div>
@@ -2090,9 +2079,9 @@ const Chat = () => {
 
                               {/* Gift message heading + message (italic, green, same size as description) */}
                               {card.gift_message && (
-                                <div className="mb-2">
-                                  <div className="text-xs font-medium text-[#075e54] mb-1">Gift message to attach:</div>
-                                  <div className="italic text-xs text-[#0b6655]">
+                                <div className="mb-3">
+                                  <div className="text-xs font-semibold text-emerald-700 mb-1.5 uppercase tracking-wide">🎁 Gift Message</div>
+                                  <div className="italic text-sm text-emerald-800 bg-emerald-50/50 border-l-4 border-emerald-400 px-3 py-2 rounded-r-lg">
                                     {(() => {
                                       const gm = normalizeQuotes(card.gift_message);
                                       if (!gm) return null;
@@ -2102,13 +2091,10 @@ const Chat = () => {
                                           {short ? `"${gm.slice(0,220)}..." ` : `"${gm}"`}
                                           {gm.length > 240 && (
                                             <button
-                                              onClick={(e) => {
-                                                e.preventDefault();
-                                                toggleExpandCard(`${message.id}-${idx}-gift`);
-                                              }}
-                                              className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
+                                              onClick={() => toggleExpandCard(`${message.id}-${idx}-gift`)}
+                                              className="ml-1 text-xs text-emerald-600 font-semibold hover:underline"
                                             >
-                                              {expandedCards.has(`${message.id}-${idx}-gift`) ? 'Learn less' : 'Learn more'}
+                                              {expandedCards.has(`${message.id}-${idx}-gift`) ? 'Show less' : 'Read more'}
                                             </button>
                                           )}
                                         </>
@@ -2120,48 +2106,45 @@ const Chat = () => {
 
                               {/* If neither personalized nor gift message exist, show description with expand */}
                               {(!card.personalized_reason && !card.gift_message && card.description) && (
-                                <>
+                                <div className="bg-gray-50/50 border-l-4 border-gray-400 px-3 py-2 rounded-r-lg">
                                   {card.description.length > 240 && !expandedCards.has(`${message.id}-${idx}`)
                                     ? renderMessageText(`${card.description.slice(0, 220)}... `)
                                     : renderMessageText(card.description)}
                                   {card.description.length > 240 && (
                                     <button
-                                      onClick={(e) => {
-                                        e.preventDefault();
-                                        toggleExpandCard(`${message.id}-${idx}`);
-                                      }}
-                                      className="ml-1 text-xs text-[#00796b] font-medium hover:underline"
+                                      onClick={() => toggleExpandCard(`${message.id}-${idx}`)}
+                                      className="ml-1 text-xs text-gray-600 font-semibold hover:underline"
                                     >
-                                      {expandedCards.has(`${message.id}-${idx}`) ? 'Learn less' : 'Learn more'}
+                                      {expandedCards.has(`${message.id}-${idx}`) ? 'Show less' : 'Read more'}
                                     </button>
                                   )}
-                                </>
+                                </div>
                               )}
 
                               {/* Gift suitability tag */}
                               {card.gift_suitability && (
-                                <div className="mt-1 inline-block bg-yellow-50 text-yellow-800 px-2 py-0.5 rounded-full text-[11px] font-medium">
+                                <div className="mt-2 inline-block bg-amber-100 text-amber-900 px-3 py-1 rounded-full text-xs font-semibold shadow-sm">
                                   🎁 {card.gift_suitability}
                                 </div>
                               )}
                             </div>
                           )}
                           
-                          {/* Purchase Buttons */}
-                          <div className="mt-3 flex justify-end gap-2">
+                          {/* Premium Purchase Buttons */}
+                          <div className="mt-4 flex justify-end gap-2">
                             <button
                               onClick={() => handleAddToCart(card)}
-                              className="bg-orange-500 hover:bg-orange-600 text-white text-xs font-medium px-3 py-1.5 rounded-md transition-colors flex items-center gap-1"
+                              className="bg-gradient-to-r from-orange-500 to-orange-600 hover:from-orange-600 hover:to-orange-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg transform hover:scale-105"
                             >
-                              <ShoppingCart className="w-3 h-3" />
+                              <ShoppingCart className="w-4 h-4" />
                               Add to Cart
                             </button>
                             <button
                               onClick={() => handleBuyNow(card)}
                               disabled={isPaymentProcessing}
-                              className="bg-[#00796b] hover:bg-[#00695c] disabled:bg-gray-400 text-white text-xs font-medium px-3 py-1.5 rounded-md transition-colors flex items-center gap-1"
+                              className="bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 disabled:from-gray-400 disabled:to-gray-500 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg transform hover:scale-105 disabled:transform-none disabled:cursor-not-allowed"
                             >
-                              <CreditCard className="w-3 h-3" />
+                              <CreditCard className="w-4 h-4" />
                               Buy Now
                             </button>
                           </div>

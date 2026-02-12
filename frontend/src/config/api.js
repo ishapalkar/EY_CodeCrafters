@@ -99,6 +99,9 @@ export const API_ENDPOINTS = {
   RECOMMENDATION: `${API_BASE_URL}:8008`,
   RECOMMENDATION_PERSONALIZED: `${API_BASE_URL}:8008/recommend`,
   
+  // Ambient Commerce (Visual Search)
+  AMBIENT_COMMERCE: `${API_BASE_URL}:8017`,
+  VISUAL_SEARCH_IMAGE: `${API_BASE_URL}:8017/search/image`,
   // Virtual Circles (Community Chat)
   VIRTUAL_CIRCLES: `${API_BASE_URL}:8007`
 };

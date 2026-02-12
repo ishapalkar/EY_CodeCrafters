@@ -59,11 +59,26 @@ class ConnectionManager:
         logger.info(f"❌ WebSocket disconnected. Total connections: {len(self.active_connections)}")
 
     async def broadcast_delivery_update(self, order_id: str, fulfillment_data: dict):
-        """Broadcast delivery status update to all connected clients"""
+        """Broadcast delivery status update to all connected clients with order details"""
+        # Try to enrich with order details
+        order_details = None
+        try:
+            order = orders_repository.get_order_by_id(order_id)
+            if order:
+                order_details = {
+                    "customer_id": order.get("customer_id"),
+                    "total_amount": order.get("total_amount"),
+                    "items": order.get("items", []),
+                    "order_date": order.get("created_at")
+                }
+        except Exception as e:
+            logger.warning(f"Could not fetch order details for {order_id}: {e}")
+        
         message = {
             "type": "delivery_update",
             "order_id": order_id,
-            "fulfillment": fulfillment_data
+            "fulfillment": fulfillment_data,
+            "order_details": order_details
         }
         disconnected = []
         for connection in self.active_connections:
@@ -109,7 +124,16 @@ def _schedule_next_progression(order_id: str):
             if isinstance(fulfillment_data.get('current_status'), str) and 'FulfillmentStatus.' in fulfillment_data['current_status']:
                 fulfillment_data['current_status'] = fulfillment_data['current_status'].split('.')[-1]
             if isinstance(fulfillment_data.get('courier_partner'), str) and 'CourierPartner.' in fulfillment_data['courier_partner']:
-                fulfillment_data['courier_partner'] = fulfillment_data['courier_partner'].split('.')[-1].title().replace('_', ' ')
+                courier_val = fulfillment_data['courier_partner'].split('.')[-1]
+                # Map enum name to actual value
+                courier_mapping = {
+                    'DELHIVERY': 'Delhivery',
+                    'BLUEDART': 'Bluedart',
+                    'DTDC': 'DTDC',
+                    'FEDEX': 'FedEx',
+                    'LOCAL': 'Local Courier'
+                }
+                fulfillment_data['courier_partner'] = courier_mapping.get(courier_val, courier_val)
             addr = fulfillment_data.get('delivery_address')
             if addr == '' or addr == '{}':
                 fulfillment_data['delivery_address'] = None
@@ -175,6 +199,24 @@ def _schedule_next_progression(order_id: str):
                 # Save to Redis - use model_dump with mode='json' to properly serialize enums
                 fulfillment_dict = fulfillment.model_dump(mode='json') if hasattr(fulfillment, 'model_dump') else fulfillment.dict()
                 redis_utils.store_fulfillment(order_id, fulfillment_dict)
+                
+                # Update order status in orders.csv
+                try:
+                    order = orders_repository.get_order(order_id)
+                    if order:
+                        # Map fulfillment status to order status
+                        status_mapping = {
+                            'PROCESSING': 'processing',
+                            'PACKED': 'packed',
+                            'SHIPPED': 'shipped',
+                            'OUT_FOR_DELIVERY': 'out_for_delivery',
+                            'DELIVERED': 'delivered'
+                        }
+                        order['status'] = status_mapping.get(str(next_status), str(next_status).lower())
+                        orders_repository.upsert_order_record(order)
+                        logger.info(f"✅ Updated order status in orders.csv: {order_id} → {order['status']}")
+                except Exception as e:
+                    logger.warning(f"Could not update order status in orders.csv: {e}")
                 
                 # Log event
                 redis_utils.add_fulfillment_event(order_id, {

@@ -223,7 +223,7 @@ async def visual_search(image: UploadFile = File(...)):
     Proxy visual search uploads to Ambient Commerce agent.
     Expects a multipart form field named "image".
     """
-    ambient_url = os.getenv("AMBIENT_COMMERCE_URL", "http://localhost:8007")
+    ambient_url = os.getenv("AMBIENT_COMMERCE_URL", "http://localhost:8017")
 
     try:
         image_bytes = await image.read()

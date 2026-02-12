@@ -39,7 +39,7 @@ AGENT_URLS = {
     "fulfillment": os.getenv("FULFILLMENT_URL", "http://localhost:8004"),
     "post_purchase": os.getenv("POST_PURCHASE_URL", "http://localhost:8005"),
     "stylist": os.getenv("STYLIST_URL", "http://localhost:8006"),
-    "ambient_commerce": os.getenv("AMBIENT_COMMERCE_URL", "http://localhost:8009"),
+    "ambient_commerce": os.getenv("AMBIENT_COMMERCE_URL", "http://localhost:8017"),
 }
 
 # HTTP timeout for agent calls (30s to handle LLM latency in recommendation service)

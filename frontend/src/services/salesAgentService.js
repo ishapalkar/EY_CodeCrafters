@@ -49,6 +49,27 @@ export const salesAgentService = {
    * Step 2: Visual search - upload image to find similar products
    * Based on: "When Aisha uploads a jacket photo, system identifies visually similar product"
    */
+  visualSearch: async (imageFile) => {
+    try {
+      const formData = new FormData();
+      formData.append('image', imageFile);
+
+      const response = await fetch(API_ENDPOINTS.VISUAL_SEARCH, {
+        method: 'POST',
+        body: formData,
+        // Note: Don't set Content-Type header - browser will set it with boundary for multipart/form-data
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      console.error('Visual search error:', error);
+      return { success: false, message: error.message };
+    }
+  },
 
   /**
    * Step 3: Get personalized recommendations
