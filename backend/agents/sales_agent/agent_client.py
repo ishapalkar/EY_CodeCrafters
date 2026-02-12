@@ -33,7 +33,7 @@ USE_REAL_AGENTS = os.getenv("USE_REAL_AGENTS", "false").lower() == "true"
 AGENT_URLS = {
     "inventory": os.getenv("INVENTORY_URL", "http://localhost:8001"),
     "recommendation": os.getenv("RECOMMENDATION_URL", "http://localhost:8008"),
-    "virtual_circles": os.getenv("VIRTUAL_CIRCLES_URL", "http://localhost:8007"),
+    "virtual_circles": os.getenv("VIRTUAL_CIRCLES_URL", "http://localhost:8009"),
     "payment": os.getenv("PAYMENT_URL", "http://localhost:8003"),
     "loyalty": os.getenv("LOYALTY_URL", "http://localhost:8002"),
     "fulfillment": os.getenv("FULFILLMENT_URL", "http://localhost:8004"),

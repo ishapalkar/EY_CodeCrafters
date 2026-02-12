@@ -45,18 +45,18 @@ export const API_ENDPOINTS = {
   LOYALTY_VALIDATE_COUPON: `${API_BASE_URL}:8002/loyalty/validate-coupon`,
   LOYALTY_PROMOTIONS: `${API_BASE_URL}:8002/loyalty/available-promotions`,
 
-  // Payment Agent
-  PAYMENT: `${API_BASE_URL}:8003`,
-  PAYMENT_PROCESS: `${API_BASE_URL}:8003/payment/process`,
-  PAYMENT_TRANSACTION: `${API_BASE_URL}:8003/payment/transaction`,
-  PAYMENT_USER_TRANSACTIONS: `${API_BASE_URL}:8003/payment/user-transactions`,
-  PAYMENT_METHODS: `${API_BASE_URL}:8003/payment/methods`,
-  PAYMENT_REFUND: `${API_BASE_URL}:8003/payment/refund`,
-  PAYMENT_AUTHORIZE: `${API_BASE_URL}:8003/payment/authorize`,
-  PAYMENT_CAPTURE: `${API_BASE_URL}:8003/payment/capture`,
-    PAYMENT_NEXT_ORDER_ID: `${API_BASE_URL}:8003/payment/next-order-id`,
-  PAYMENT_RAZORPAY_CREATE: `${API_BASE_URL}:8003/payment/razorpay/create-order`,
-  PAYMENT_RAZORPAY_VERIFY: `${API_BASE_URL}:8003/payment/razorpay/verify-payment`,
+  // Payment Agent (proxied through Sales Agent)
+  PAYMENT: `${API_BASE_URL}:8010/api/payment`,
+  PAYMENT_PROCESS: `${API_BASE_URL}:8010/api/payment/process`,
+  PAYMENT_TRANSACTION: `${API_BASE_URL}:8010/api/payment/transaction`,
+  PAYMENT_USER_TRANSACTIONS: `${API_BASE_URL}:8010/api/payment/user-transactions`,
+  PAYMENT_METHODS: `${API_BASE_URL}:8010/api/payment/methods`,
+  PAYMENT_REFUND: `${API_BASE_URL}:8010/api/payment/refund`,
+  PAYMENT_AUTHORIZE: `${API_BASE_URL}:8010/api/payment/authorize`,
+  PAYMENT_CAPTURE: `${API_BASE_URL}:8010/api/payment/capture`,
+  PAYMENT_NEXT_ORDER_ID: `${API_BASE_URL}:8010/api/payment/next-order-id`,
+  PAYMENT_RAZORPAY_CREATE: `${API_BASE_URL}:8010/api/payment/razorpay/create-order`,
+  PAYMENT_RAZORPAY_VERIFY: `${API_BASE_URL}:8010/api/payment/razorpay/verify-payment`,
 
   // Fulfillment Agent
   FULFILLMENT: `${API_BASE_URL}:8004`,
@@ -103,7 +103,7 @@ export const API_ENDPOINTS = {
   AMBIENT_COMMERCE: `${API_BASE_URL}:8017`,
   VISUAL_SEARCH_IMAGE: `${API_BASE_URL}:8017/search/image`,
   // Virtual Circles (Community Chat)
-  VIRTUAL_CIRCLES: `${API_BASE_URL}:8007`
+  VIRTUAL_CIRCLES: `${API_BASE_URL}:8009`
 };
 
 // Helper function for API calls with error handling

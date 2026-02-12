@@ -199,6 +199,7 @@ export const salesAgentService = {
    */
   triggerPostPayment: async (orderId, customerId, sessionToken, amountPaid, paymentId, transactionId = null) => {
     try {
+      const normalizedCustomerId = customerId != null ? String(customerId) : '';
       const response = await fetch(API_ENDPOINTS.POST_PAYMENT, {
         method: 'POST',
         headers: {
@@ -206,7 +207,7 @@ export const salesAgentService = {
         },
         body: JSON.stringify({
           order_id: orderId,
-          customer_id: customerId,
+          customer_id: normalizedCustomerId,
           session_token: sessionToken,
           amount_paid: amountPaid,
           payment_id: paymentId,

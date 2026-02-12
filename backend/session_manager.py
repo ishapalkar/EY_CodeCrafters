@@ -261,7 +261,6 @@ def create_session(
     - data: { cart: [], recent: [], chat_context: [], last_action: None }
     - created_at: session creation timestamp
     - updated_at: last activity timestamp
-    - expires_at: 2 hours from creation
     - is_active: session status
 
     Args:
@@ -737,7 +736,7 @@ async def session_end(x_session_token: Optional[str] = Header(None, alias="X-Ses
     """End a session by marking it as inactive.
 
     The session_id persists, and the same phone can restore it later.
-    Session remains in memory for 2 hours but is marked inactive.
+    Session remains in memory but is marked inactive.
     """
     # Validate header presence
     if not x_session_token:
@@ -771,7 +770,6 @@ try:
         validate_login,
         generate_qr_token,
         verify_qr_token,
-        cleanup_expired_qr_tokens,
     )
     AUTH_ENABLED = True
     logger.info("Auth manager loaded successfully - password authentication enabled")
@@ -962,7 +960,7 @@ async def auth_logout(x_session_token: Optional[str] = Header(None, alias="X-Ses
     3. Removes token from lookup tables
     4. Returns success message
     
-    Note: Session data is preserved for 2 hours but marked inactive.
+    Note: Session data is preserved in memory but marked inactive.
     User must login again to get a new token.
     """
     if not x_session_token:
@@ -1027,7 +1025,7 @@ async def auth_qr_init(
     
     # Verify session exists and is active
     if x_session_token not in SESSIONS:
-        raise HTTPException(status_code=401, detail="Invalid or expired session")
+        raise HTTPException(status_code=401, detail="Invalid session")
     
     session = SESSIONS[x_session_token]
     
@@ -1044,15 +1042,11 @@ async def auth_qr_init(
         # Generate QR token
         qr_token = generate_qr_token(phone, customer_id)
         
-        # Cleanup expired tokens periodically
-        cleanup_expired_qr_tokens()
-        
         logger.info(f"QR token generated for customer {customer_id}")
         
         return JSONResponse(status_code=200, content={
             "success": True,
             "qr_token": qr_token,
-            "expires_in_seconds": 900,  # 15 minutes
             "customer_id": customer_id,
         })
         
@@ -1066,7 +1060,7 @@ async def auth_qr_verify(request: QRVerifyRequest):
     """Verify a QR code token and create a kiosk session.
     
     This endpoint:
-    1. Validates QR token (checks expiry)
+    1. Validates QR token
     2. Retrieves customer info from token
     3. Creates new kiosk session
     4. Returns session token for kiosk
@@ -1094,7 +1088,7 @@ async def auth_qr_verify(request: QRVerifyRequest):
         valid, customer_info = verify_qr_token(qr_token)
         
         if not valid:
-            raise HTTPException(status_code=401, detail="Invalid or expired QR token")
+            raise HTTPException(status_code=401, detail="Invalid QR token")
         
         phone = customer_info['phone']
         customer_id = customer_info['customer_id']

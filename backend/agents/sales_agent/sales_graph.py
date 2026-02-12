@@ -98,7 +98,7 @@ WORKER_SERVICES = {
     "fulfillment": "http://localhost:8004",
     "post_purchase": "http://localhost:8005",
     "stylist": "http://localhost:8006",
-    "virtual_circles": "http://localhost:8007",  # Virtual Circles (Community Chat)
+    "virtual_circles": "http://localhost:8009",  # Virtual Circles (Community Chat)
     "ambient_commerce": os.getenv("AMBIENT_COMMERCE_URL", "http://localhost:8017"),
 }
 

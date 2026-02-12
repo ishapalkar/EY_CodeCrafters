@@ -15,12 +15,12 @@ export default defineConfig({
     proxy: {
       // Proxy API calls to backend during development
       '/api': {
-        target: 'http://localhost:8007',
+        target: 'http://localhost:8010',
         changeOrigin: true,
         secure: false
       },
       '/health': {
-        target: 'http://localhost:8007',
+        target: 'http://localhost:8010',
         changeOrigin: true,
         secure: false
       }

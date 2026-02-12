@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 # Base URL for the agent
-BASE_URL = "http://localhost:8007"
+BASE_URL = "http://localhost:8017"
 
 # Test image paths (relative to data directory)
 TEST_IMAGES = [

@@ -367,6 +367,7 @@ class Product(BaseModel):
     rating: float
     in_stock: bool
     personalized_reason: str
+    image_url: str = ""  # Product image URL
     
     # Optional fields for gifting mode
     gift_message: Optional[str] = None
@@ -1019,10 +1020,8 @@ async def _mode_normal(request: RecommendationRequest, customer_profile: Dict, p
             'price': float(product['price']),
             'rating': float(product['ratings']),
             'in_stock': True,
-            'image': _resolved_image(product.get('image_url') or product.get('image') or ''),
             'image_url': _resolved_image(product.get('image_url') or product.get('image') or ''),
             'personalized_reason': reason,
-            'description': product.get('description', '')
         })
     
     return recommendations
@@ -1271,12 +1270,10 @@ Write a genuine, emotional message that the giver would write on a gift card. Be
             'price': float(product['price']),
             'rating': float(product['ratings']),
             'in_stock': True,
-            'image': _resolved_image(product.get('image_url') or product.get('image') or ''),
             'image_url': _resolved_image(product.get('image_url') or product.get('image') or ''),
             'personalized_reason': gift_reason,
             'gift_message': gift_message,
             'gift_suitability': suitability,
-            'description': product.get('description', '')
         })
     
     return recommendations
@@ -1456,11 +1453,9 @@ Explain why they'll likely need this next based on their style. Be specific and 
             'price': float(product['price']),
             'rating': float(product['ratings']),
             'in_stock': True,
-            'image': _resolved_image(product.get('image_url') or product.get('image') or ''),
             'image_url': _resolved_image(product.get('image_url') or product.get('image') or ''),
             'personalized_reason': predictive_reason,
             'trend_capsule': True,
-            'description': product.get('description', '')
         })
     
     return recommendations

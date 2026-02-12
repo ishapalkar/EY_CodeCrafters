@@ -33,11 +33,8 @@ CUSTOMERS_CSV = DATA_DIR / "customers.csv"
 # Stores password hashes: phone_number -> bcrypt_hash
 PASSWORD_STORE: Dict[str, str] = {}
 
-# QR token store: qr_token -> {phone, expires_at, customer_id}
+# QR token store: qr_token -> {phone, customer_id}
 QR_TOKEN_STORE: Dict[str, Dict[str, Any]] = {}
-
-# QR token expiry (15 minutes for kiosk security)
-QR_TOKEN_EXPIRY = timedelta(minutes=15)
 
 
 # ===========================
@@ -96,6 +93,8 @@ def store_password(phone: str, password: str) -> None:
 def check_password(phone: str, password: str) -> bool:
     """Check if a password matches the stored hash for a phone number.
     
+    Triggers lazy loading of default passwords on first call.
+    
     Args:
         phone: Phone number
         password: Plain text password to verify
@@ -103,6 +102,9 @@ def check_password(phone: str, password: str) -> bool:
     Returns:
         True if password matches stored hash, False otherwise
     """
+    # Trigger lazy loading on first use
+    _lazy_load_existing_passwords()
+    
     if not phone or not password:
         return False
     
@@ -301,7 +303,7 @@ def generate_qr_token(phone: str, customer_id: str) -> str:
     """Generate a QR token for kiosk authentication.
     
     The token is a secure random string that maps to the user's phone and customer_id.
-    Tokens expire after QR_TOKEN_EXPIRY (15 minutes).
+    Tokens are valid indefinitely until explicitly revoked.
     
     Args:
         phone: Customer phone number
@@ -313,18 +315,14 @@ def generate_qr_token(phone: str, customer_id: str) -> str:
     # Generate secure random token
     qr_token = secrets.token_hex(32)
     
-    # Calculate expiry time
-    expires_at = datetime.utcnow() + QR_TOKEN_EXPIRY
-    
-    # Store token mapping
+    # Store token mapping (no expiry)
     QR_TOKEN_STORE[qr_token] = {
         'phone': phone,
         'customer_id': customer_id,
-        'expires_at': expires_at,
         'created_at': datetime.utcnow(),
     }
     
-    logger.info(f"QR token generated for customer {customer_id}, expires at {expires_at}")
+    logger.info(f"QR token generated for customer {customer_id}")
     return qr_token
 
 
@@ -345,14 +343,7 @@ def verify_qr_token(qr_token: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
     
     token_data = QR_TOKEN_STORE[qr_token]
     
-    # Check if token expired
-    if datetime.utcnow() > token_data['expires_at']:
-        logger.warning(f"QR token expired: {qr_token}")
-        # Clean up expired token
-        del QR_TOKEN_STORE[qr_token]
-        return False, None
-    
-    # Token is valid - return customer info
+    # Token is valid - return customer info (no expiry check)
     customer_info = {
         'phone': token_data['phone'],
         'customer_id': token_data['customer_id'],
@@ -367,32 +358,28 @@ def verify_qr_token(qr_token: str) -> Tuple[bool, Optional[Dict[str, Any]]]:
 
 
 def cleanup_expired_qr_tokens() -> int:
-    """Remove expired QR tokens from memory.
+    """No-op function for backward compatibility.
+    
+    QR tokens no longer expire, so cleanup is not needed.
     
     Returns:
-        Number of tokens cleaned up
+        Always returns 0
     """
-    now = datetime.utcnow()
-    expired_tokens = [
-        token for token, data in QR_TOKEN_STORE.items()
-        if now > data['expires_at']
-    ]
-    
-    for token in expired_tokens:
-        del QR_TOKEN_STORE[token]
-    
-    if expired_tokens:
-        logger.info(f"Cleaned up {len(expired_tokens)} expired QR tokens")
-    
-    return len(expired_tokens)
+    return 0
 
 
 # ===========================
 # Initialization
 # ===========================
 
-def load_existing_passwords() -> None:
-    """Load existing customer phone numbers and create default passwords.
+# Flag to track if we've already loaded default passwords
+_PASSWORDS_LOADED = False
+_DEFAULT_PASSWORD = "Reebok@123"
+_DEFAULT_PASSWORD_HASH = None  # Cache the hash to avoid re-hashing 356 times
+
+
+def _lazy_load_existing_passwords() -> None:
+    """Lazy load existing customer passwords on first use (not at module import time).
     
     For existing customers (from customers.csv), we create a default password
     to ensure they can login via the website immediately.
@@ -403,33 +390,40 @@ def load_existing_passwords() -> None:
     1. Login with default password, OR
     2. Continue using WhatsApp (phone-only) flow
     """
-    DEFAULT_PASSWORD = "Reebok@123"
+    global _PASSWORDS_LOADED, _DEFAULT_PASSWORD_HASH
+    
+    # Only load once
+    if _PASSWORDS_LOADED:
+        return
+    
+    # Hash the default password once and reuse it
+    if _DEFAULT_PASSWORD_HASH is None:
+        try:
+            _DEFAULT_PASSWORD_HASH = hash_password(_DEFAULT_PASSWORD)
+        except Exception as e:
+            logger.error(f"Failed to hash default password: {e}")
+            return
     
     try:
         df = pd.read_csv(CUSTOMERS_CSV)
-        logger.info(f"Loading {len(df)} existing customers from CSV...")
-        
-        # Create default passwords for all existing customers
         password_count = 0
+        
+        # Assign cached hash to all existing customers (no hashing needed)
         for _, row in df.iterrows():
             phone = str(row['phone_number']).strip()
             if phone and phone not in PASSWORD_STORE:
-                try:
-                    # Store default password hash
-                    hashed = hash_password(DEFAULT_PASSWORD)
-                    PASSWORD_STORE[phone] = hashed
-                    password_count += 1
-                except Exception as e:
-                    logger.warning(f"Failed to create default password for phone {phone}: {e}")
+                PASSWORD_STORE[phone] = _DEFAULT_PASSWORD_HASH
+                password_count += 1
         
-        logger.info(f"✅ Created default passwords for {password_count} existing customers")
-        logger.info(f"📌 Default password: '{DEFAULT_PASSWORD}' (users should change this)")
+        if password_count > 0:
+            logger.info(f"✅ Set default password for {password_count} existing customers")
+        
+        _PASSWORDS_LOADED = True
         
     except Exception as e:
-        logger.error(f"Error loading customers: {e}")
+        logger.error(f"Error loading customer passwords: {e}")
+        _PASSWORDS_LOADED = True  # Mark as loaded to avoid retry spam
 
 
-# Load existing customers on module import
-load_existing_passwords()
-
+# Don't load at module import time - load lazily on first use
 logger.info("🔐 Auth manager initialized successfully")

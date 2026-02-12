@@ -45,24 +45,28 @@ const CheckoutPage = () => {
 
     try {
       // Calculate total amount
-      const totalAmount = getCartTotal();
+      const totalAmount = Number(getCartTotal());
+      if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
+        throw new Error('Invalid cart total. Please review your cart items.');
+      }
 
       // Prepare cart data for order creation
       const cart = cartItems.map((item) => ({
         sku: item.sku,
-        qty: item.qty,
-        unit_price: parseFloat(item.unit_price || 0),
+        qty: Number(item.qty) || 1,
+        unit_price: Number(item.unit_price || 0),
       }));
+
+      const safeNotes = {};
+      if (userId) safeNotes.customer_id = String(userId);
+      if (sessionToken) safeNotes.session_token = String(sessionToken);
+      safeNotes.source = 'web_checkout';
 
       // Create Razorpay order
       const orderData = {
         amount_rupees: totalAmount,
         currency: 'INR',
-        notes: {
-          customer_id: userId,
-          session_token: sessionToken,
-          source: 'web_checkout',
-        },
+        notes: safeNotes,
         items: cart,
       };
 
@@ -80,14 +84,29 @@ const CheckoutPage = () => {
           console.log('Payment successful:', response);
 
           try {
+            const razorpayPaymentId = response?.razorpay_payment_id;
+            const razorpayOrderId = response?.razorpay_order_id;
+            const canonicalOrderId = String(razorpayOrder?.order_id || '').trim();
+            const amountRupees = Number(razorpayOrder?.amount_rupees);
+
+            if (!razorpayPaymentId || !razorpayOrderId) {
+              throw new Error('Razorpay did not return payment identifiers.');
+            }
+            if (!canonicalOrderId) {
+              throw new Error('Order ID is missing for payment verification.');
+            }
+            if (!Number.isFinite(amountRupees) || amountRupees <= 0) {
+              throw new Error('Invalid payment amount for verification.');
+            }
+
             // Verify payment with backend
             const verificationData = {
-              razorpay_payment_id: response.razorpay_payment_id,
-              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: razorpayPaymentId,
+              razorpay_order_id: razorpayOrderId,
               razorpay_signature: response.razorpay_signature,
-              amount_rupees: razorpayOrder.amount_rupees,
-              user_id: userId,
-              order_id: razorpayOrder.order_id,
+              amount_rupees: amountRupees,
+              user_id: userId ? String(userId) : undefined,
+              order_id: canonicalOrderId,
             };
 
             const verificationResult = await verifyRazorpayPayment(verificationData);

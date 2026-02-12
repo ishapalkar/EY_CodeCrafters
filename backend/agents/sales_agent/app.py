@@ -19,6 +19,7 @@ from fastapi import FastAPI, Request, status, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import requests
+import httpx
 from fastapi.exceptions import RequestValidationError
 from pydantic import BaseModel, Field
 import uvicorn
@@ -36,6 +37,8 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+PAYMENT_SERVICE_URL = os.getenv("PAYMENT_URL", "http://localhost:8003")
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -403,6 +406,53 @@ async def handle_post_payment(request: PostPaymentRequest):
                 "error": str(e),
                 "message": "Failed to process post-payment workflow"
             }
+        )
+
+
+@app.api_route("/api/payment/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+async def proxy_payment_requests(path: str, request: Request):
+    """Proxy all payment requests through the Sales Agent."""
+    target_url = f"{PAYMENT_SERVICE_URL}/payment/{path}"
+    try:
+        body = await request.body()
+        params = dict(request.query_params)
+        headers = {}
+        content_type = request.headers.get("content-type")
+        if content_type:
+            headers["content-type"] = content_type
+
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.request(
+                request.method,
+                target_url,
+                params=params,
+                content=body if body else None,
+                headers=headers,
+            )
+
+        try:
+            payload = response.json()
+            return JSONResponse(status_code=response.status_code, content=payload)
+        except ValueError:
+            return JSONResponse(
+                status_code=response.status_code,
+                content={"raw": response.text},
+            )
+    except httpx.TimeoutException:
+        return JSONResponse(
+            status_code=504,
+            content={"error": "Payment service timeout"},
+        )
+    except httpx.ConnectError:
+        return JSONResponse(
+            status_code=503,
+            content={"error": "Cannot connect to payment service"},
+        )
+    except Exception as e:
+        logger.error(f"❌ Payment proxy failed: {e}", exc_info=True)
+        return JSONResponse(
+            status_code=500,
+            content={"error": "Payment proxy failed", "detail": str(e)},
         )
 
 
