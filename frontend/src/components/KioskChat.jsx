@@ -42,6 +42,8 @@ const KioskChat = () => {
   const transcriptRef = useRef('');
   const [expandedMessages, setExpandedMessages] = useState(new Set());
   const [expandedCards, setExpandedCards] = useState(new Set());
+  const [kioskSummary, setKioskSummary] = useState(null);
+  const [showFeatured, setShowFeatured] = useState(true);
 
   const toggleExpandMessage = (id) => {
     setExpandedMessages(prev => {
@@ -255,12 +257,46 @@ const KioskChat = () => {
             console.log('[KioskChat] ✅ Session restored successfully:', { 
               customer_id: restoredSession?.customer_id,
               hasData: !!restoredSession?.data,
-              chatContextLength: restoredSession?.data?.chat_context?.length || 0
+              chatContextLength: restoredSession?.data?.chat_context?.length || 0,
+              hasSummary: !!restoredSession?.data?.conversation_summary,
+              channel: restoredSession?.channel
             });
             
             setSessionToken(storedToken);
             setSessionInfo(restoredSession);
             sessionStore.setPhone(phone);
+
+            // Fetch customer context for Kiosk channel
+            if (restoredSession?.channel === 'kiosk' && restoredSession?.data?.conversation_summary) {
+              try {
+                console.log('[KioskChat] 🖥️ Fetching customer context for Kiosk...');
+                const contextResp = await fetch(`${SALES_API}/api/customer-context?session_token=${storedToken}`);
+                if (contextResp.ok) {
+                  const contextData = await contextResp.json();
+                  if (contextData.has_context && contextData.summary) {
+                    // Build kiosk_summary from context API
+                    const kioskCtx = {
+                      type: 'customer_context',
+                      title: 'Customer Context',
+                      summary: contextData.summary.text,
+                      details: {
+                        cart_items: contextData.summary.cart_items || 0,
+                        last_action: contextData.summary.last_action || 'browsing',
+                        products_viewed: contextData.last_products_viewed?.length || 0,
+                        previous_channels: contextData.summary.previous_channels || [],
+                        interaction_count: contextData.summary.interactions || 0
+                      },
+                      cart: contextData.cart || [],
+                      last_recommended: contextData.last_products_viewed || []
+                    };
+                    setKioskSummary(kioskCtx);
+                    console.log('[KioskChat] ✅ Customer context loaded on restore:', kioskCtx);
+                  }
+                }
+              } catch (ctxErr) {
+                console.warn('[KioskChat] Could not fetch customer context:', ctxErr);
+              }
+            }
 
             applyServerProfile(restoredSession?.data?.customer_profile);
 
@@ -465,6 +501,46 @@ const KioskChat = () => {
     startOrRestoreSession();
   }, [navigate]);
 
+  // Fetch customer context for Kiosk when session is ready
+  useEffect(() => {
+    const fetchKioskContext = async () => {
+      if (!sessionToken || !sessionInfo) return;
+      if (sessionInfo.channel !== 'kiosk') return;
+      if (!sessionInfo.data?.conversation_summary) return;
+      if (kioskSummary) return; // Already have summary
+
+      try {
+        console.log('[KioskChat] 📊 Fetching customer context via useEffect...');
+        const resp = await fetch(`${SALES_API}/api/customer-context?session_token=${sessionToken}`);
+        if (resp.ok) {
+          const data = await resp.json();
+          if (data.has_context && data.summary) {
+            const ctx = {
+              type: 'customer_context',
+              title: 'Customer Context',
+              summary: data.summary.text,
+              details: {
+                cart_items: data.summary.cart_items || 0,
+                last_action: data.summary.last_action || 'browsing',
+                products_viewed: data.last_products_viewed?.length || 0,
+                previous_channels: data.summary.previous_channels || [],
+                interaction_count: data.summary.interactions || 0
+              },
+              cart: data.cart || [],
+              last_recommended: data.last_products_viewed || []
+            };
+            setKioskSummary(ctx);
+            console.log('[KioskChat] ✅ Context loaded via useEffect:', ctx);
+          }
+        }
+      } catch (err) {
+        console.warn('[KioskChat] Failed to fetch context via useEffect:', err);
+      }
+    };
+
+    fetchKioskContext();
+  }, [sessionToken, sessionInfo, kioskSummary]);
+
   // Initialize Speech Recognition
   useEffect(() => {
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
@@ -557,6 +633,21 @@ const KioskChat = () => {
 
       const data = await resp.json();
       const botText = data.reply || 'Sorry, I could not process that.';
+
+      console.log('[KioskChat] 📨 Agent response received:', {
+        hasMetadata: !!data.metadata,
+        hasKioskSummary: !!data.metadata?.kiosk_summary,
+        channel: data.metadata?.channel,
+        metadata: data.metadata
+      });
+
+      // Extract Kiosk summary if available
+      if (data.metadata?.kiosk_summary) {
+        setKioskSummary(data.metadata.kiosk_summary);
+        console.log('[KioskChat] 📋 Customer context updated:', data.metadata.kiosk_summary);
+      } else {
+        console.log('[KioskChat] ⚠️ No kiosk_summary in response metadata');
+      }
 
       // Update session token if returned
       if (data.session_token) setSessionToken(data.session_token);
@@ -771,6 +862,100 @@ const KioskChat = () => {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col max-w-[1600px] mx-auto w-full px-8 py-6">
+        
+        {/* Customer Context Summary Banner (Kiosk Only) */}
+        {kioskSummary && (
+          <div className="mb-4 bg-gradient-to-r from-blue-50 to-cyan-50 border-l-4 border-blue-500 rounded-lg p-5 shadow-md animate-fadeIn">
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-3">
+                  <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center">
+                    <User className="w-4 h-4 text-white" />
+                  </div>
+                  <h3 className="text-base font-bold text-blue-900">
+                    {kioskSummary.title || 'Customer Context'}
+                  </h3>
+                </div>
+                
+                <p className="text-sm text-blue-800 leading-relaxed mb-3">
+                  {kioskSummary.summary}
+                </p>
+
+                <div className="flex flex-wrap gap-3 mb-3">
+                  {kioskSummary.details?.cart_items > 0 && (
+                    <div className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-blue-200">
+                      <ShoppingBag className="w-3.5 h-3.5 text-blue-600" />
+                      <span className="text-xs font-semibold text-blue-700">
+                        {kioskSummary.details.cart_items} {kioskSummary.details.cart_items === 1 ? 'item' : 'items'} in cart
+                      </span>
+                    </div>
+                  )}
+                  
+                  {kioskSummary.details?.interaction_count > 0 && (
+                    <div className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-blue-200">
+                      <div className="w-3.5 h-3.5 bg-blue-500 rounded-full"></div>
+                      <span className="text-xs font-semibold text-blue-700">
+                        {kioskSummary.details.interaction_count} interactions
+                      </span>
+                    </div>
+                  )}
+
+                  {kioskSummary.details?.previous_channels?.length > 0 && (
+                    <div className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-blue-200">
+                      <span className="text-xs text-blue-600">📱</span>
+                      <span className="text-xs font-semibold text-blue-700">
+                        {kioskSummary.details.previous_channels.join(', ')}
+                      </span>
+                    </div>
+                  )}
+
+                  {kioskSummary.details?.last_action && (
+                    <div className="flex items-center gap-1.5 bg-white px-3 py-1.5 rounded-full shadow-sm border border-blue-200">
+                      <span className="text-xs text-blue-600">🏷️</span>
+                      <span className="text-xs font-semibold text-blue-700">
+                        {kioskSummary.details.last_action.replace('_', ' ')}
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                {kioskSummary.cart && kioskSummary.cart.length > 0 && (
+                  <div className="mt-3 bg-white rounded-lg p-3 border border-blue-200">
+                    <p className="text-xs font-bold text-blue-800 mb-2">Cart Items:</p>
+                    <div className="space-y-1.5">
+                      {kioskSummary.cart.slice(0, 3).map((item, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-xs">
+                          <span className="text-blue-700 font-medium">• {item.name || item.sku}</span>
+                          <span className="text-blue-900 font-semibold">₹{item.price}</span>
+                        </div>
+                      ))}
+                      {kioskSummary.cart.length > 3 && (
+                        <p className="text-xs text-blue-600 italic mt-1">
+                          +{kioskSummary.cart.length - 3} more items
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {kioskSummary.details?.cart_items > 0 && (
+                  <div className="mt-3 inline-flex items-center gap-2 bg-green-100 px-3 py-1.5 rounded-full border border-green-300">
+                    <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                    <span className="text-xs font-bold text-green-800">✅ Ready to Checkout</span>
+                  </div>
+                )}
+              </div>
+
+              <button
+                onClick={() => setKioskSummary(null)}
+                className="ml-4 p-1.5 hover:bg-blue-100 rounded-full transition-colors"
+                title="Dismiss summary"
+              >
+                <X className="w-4 h-4 text-blue-600" />
+              </button>
+            </div>
+          </div>
+        )}
         
         {/* Chat Messages Area */}
         <div className="flex-1 overflow-y-auto mb-6 px-4 space-y-4 scrollbar-thin scrollbar-thumb-gray-300 scrollbar-track-transparent">

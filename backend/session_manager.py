@@ -15,7 +15,7 @@ Every function and major step contains inline comments and docstrings.
 # Standard library imports
 import uuid
 import logging
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime
 from pathlib import Path
 
@@ -31,6 +31,110 @@ from db.repositories.customer_repo import ensure_customer, ensure_customer_recor
 # Configure a simple logger for this module
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+# ==========================================
+# PERSUASION ENGINE HELPERS
+# ==========================================
+
+def _detect_last_action_from_message(message: str) -> Optional[str]:
+    """Detect user intent from message using keyword matching."""
+    message_lower = message.lower()
+    
+    # Purchase intent keywords
+    if any(kw in message_lower for kw in ["buy", "purchase", "checkout", "order", "payment", "pay"]):
+        return "purchase_intent"
+    
+    # Cart update keywords
+    if any(kw in message_lower for kw in ["add to cart", "add cart", "cart"]):
+        return "cart_update"
+    
+    # Browsing keywords
+    if any(kw in message_lower for kw in ["show", "recommend", "looking", "want", "need", "find", "search"]):
+        return "browsing"
+    
+    return None
+
+
+def _generate_simple_summary(chat_context: List[Dict[str, Any]]) -> str:
+    """Generate a 2-3 line conversation summary using simple heuristics."""
+    if not chat_context or len(chat_context) < 2:
+        return ""
+    
+    # Take last 10 messages
+    recent = chat_context[-10:]
+    user_msgs = [msg["message"].lower() for msg in recent if msg.get("sender") == "user"]
+    
+    if not user_msgs:
+        return ""
+    
+    # Detect products mentioned
+    product_kws = ["shoe", "shirt", "pant", "jacket", "sneaker", "tshirt", "jeans", "hoodie", "running", "casual", "formal"]
+    products = []
+    for msg in user_msgs:
+        for kw in product_kws:
+            if kw in msg and kw not in products:
+                products.append(kw)
+    
+    # Detect stage
+    stage = "browsing"
+    if any(kw in " ".join(user_msgs[-3:]) for kw in ["buy", "purchase", "order", "checkout", "cart", "payment"]):
+        stage = "ready to purchase"
+    elif any(kw in " ".join(user_msgs[-3:]) for kw in ["compare", "difference", "between", "better"]):
+        stage = "comparing options"
+    
+    product_text = ", ".join(products[:3]) + "s" if products else "products"
+    return f"Customer is {stage} - interested in {product_text}. {len(user_msgs)} interactions so far."
+
+
+def _should_generate_summary(chat_context: List[Dict[str, Any]]) -> bool:
+    """Check if it's time to generate summary (every 6 messages)."""
+    return len(chat_context) % 6 == 0 and len(chat_context) >= 6
+
+
+def _update_metadata_to_supabase(session_token: str, session: Dict[str, Any]) -> bool:
+    """Update only the metadata field in Supabase (lightweight update)."""
+    if not is_supabase_enabled():
+        return False
+    
+    try:
+        import requests
+        from db.supabase_client import SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
+        from datetime import datetime
+        
+        session_id = session.get("session_id")
+        if not session_id:
+            return False
+        
+        now = datetime.utcnow().isoformat() + "Z"
+        
+        url = f"{SUPABASE_URL}/rest/v1/sessions"
+        headers = {
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": "return=minimal"
+        }
+        
+        params = {"session_token": f"eq.{session_token}"}
+        
+        # Update metadata and last_activity
+        update_payload = {
+            "metadata": session.get("data", {}),
+            "last_activity": now
+        }
+        
+        response = requests.patch(url, json=update_payload, headers=headers, params=params, timeout=5)
+        
+        if response.status_code in [200, 204]:
+            logger.debug(f"[METADATA] ✅ Updated metadata for session {session_id[:12]}...")
+            return True
+        else:
+            logger.warning(f"[METADATA] ⚠️ Failed to update: {response.status_code}")
+            return False
+            
+    except Exception as e:
+        logger.debug(f"[METADATA] Update failed: {e}")
+        return False
 
 # Initialize FastAPI app
 app = FastAPI(title="Session Manager", version="1.0.0")
@@ -891,15 +995,60 @@ def update_session_state(token: str, action: str, payload: Dict[str, Any]) -> Di
                 chat_entry["metadata"] = metadata
             data["chat_context"].append(chat_entry)
 
+        # ENHANCEMENT 1: Detect last_action from user messages
+        if sender == "user" and message:
+            detected_action = _detect_last_action_from_message(message)
+            if detected_action:
+                data["last_action"] = detected_action
+                logger.debug(f"🔍 Detected last_action: {detected_action}")
+        
+        # ENHANCEMENT 2: Extract SKUs from agent messages with cards
+        if sender == "agent" and isinstance(metadata, dict):
+            cards = metadata.get("cards", [])
+            if cards:
+                skus = []
+                for card in cards:
+                    if isinstance(card, dict):
+                        sku = card.get("sku") or card.get("SKU") or card.get("product_id")
+                        if sku:
+                            skus.append(str(sku))
+                
+                if skus:
+                    # Update last_recommended_skus
+                    data["last_recommended_skus"] = skus
+                    
+                    # Add unique SKUs to recent (max 10)
+                    for sku in skus:
+                        if sku not in data["recent"]:
+                            data["recent"].append(sku)
+                    data["recent"] = data["recent"][-10:]  # Keep last 10
+                    
+                    logger.debug(f"🏷️ Updated last_recommended_skus: {len(skus)} SKUs")
+        
+        # ENHANCEMENT 3: Generate conversation summary every 6 messages
+        if _should_generate_summary(data["chat_context"]):
+            summary = _generate_simple_summary(data["chat_context"])
+            if summary:
+                data["conversation_summary"] = summary
+                logger.info(f"📝 Generated conversation summary: {summary[:80]}...")
+
         if isinstance(metadata, dict):
             shipping_address = _sanitize_shipping_address(metadata.get("shipping_address"))
             if shipping_address:
                 data["shipping_address"] = shipping_address
                 _sync_shipping_address(session, shipping_address)
 
-        data["last_action"] = {"type": "chat_message", "sender": sender, "timestamp": _now_iso()}
+        # Update last_action timestamp
+        if not isinstance(data.get("last_action"), dict):
+            data["last_action"] = {"type": "chat_message", "sender": sender, "timestamp": _now_iso()}
 
         logger.info(f"Appended chat message for token={token}: sender={sender}")
+        
+        # ENHANCEMENT 4: Persist metadata to Supabase immediately
+        try:
+            _update_metadata_to_supabase(token, session)
+        except Exception as persist_error:
+            logger.warning(f"⚠️ Metadata persistence failed: {persist_error}")
 
     else:
         # Unknown action type -> client error
