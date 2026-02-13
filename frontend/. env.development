@@ -1,0 +1,7 @@
+# Frontend Environment Variables for Development
+
+# Backend API URL (local development)
+VITE_BACKEND_URL=http://localhost
+
+# For development, individual services run on different ports
+# The api.js config handles this automatically

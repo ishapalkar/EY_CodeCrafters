@@ -89,17 +89,17 @@ try:
 except Exception as e:
     logger.warning(f"⚠️  Could not load product mappings: {e}")
 
-# Microservice URLs
+# Microservice URLs - Read from environment variables for flexibility
 WORKER_SERVICES = {
-    "recommendation": "http://localhost:8008",  # Matches recommendation/app.py uvicorn port
-    "inventory": "http://localhost:8001",
-    "payment": "http://localhost:8003",
-    "loyalty": "http://localhost:8002",
-    "fulfillment": "http://localhost:8004",
-    "post_purchase": "http://localhost:8005",
-    "stylist": "http://localhost:8006",
-    "virtual_circles": "http://localhost:8009",  # Virtual Circles (Community Chat)
-    "ambient_commerce": os.getenv("AMBIENT_COMMERCE_URL", "http://localhost:8017"),
+    "recommendation": os.getenv("RECOMMENDATION_SERVICE_URL", "http://localhost:8008"),
+    "inventory": os.getenv("INVENTORY_SERVICE_URL", "http://localhost:8001"),
+    "payment": os.getenv("PAYMENT_SERVICE_URL", "http://localhost:8003"),
+    "loyalty": os.getenv("LOYALTY_SERVICE_URL", "http://localhost:8002"),
+    "fulfillment": os.getenv("FULFILLMENT_SERVICE_URL", "http://localhost:8004"),
+    "post_purchase": os.getenv("POST_PURCHASE_SERVICE_URL", "http://localhost:8005"),
+    "stylist": os.getenv("STYLIST_SERVICE_URL", "http://localhost:8006"),
+    "virtual_circles": os.getenv("VIRTUAL_CIRCLES_SERVICE_URL", "http://localhost:8009"),
+    "ambient_commerce": os.getenv("AMBIENT_COMMERCE_SERVICE_URL", "http://localhost:8017"),
 }
 
 WORKER_TIMEOUT_SECONDS = int(os.getenv("SALES_AGENT_WORKER_TIMEOUT", "25"))

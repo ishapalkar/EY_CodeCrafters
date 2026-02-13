@@ -38,7 +38,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-PAYMENT_SERVICE_URL = os.getenv("PAYMENT_URL", "http://localhost:8003")
+PAYMENT_SERVICE_URL = os.getenv("PAYMENT_SERVICE_URL", os.getenv("PAYMENT_URL", "http://localhost:8003"))
 
 # Initialize FastAPI app
 app = FastAPI(
@@ -236,8 +236,9 @@ async def get_customer_context(session_token: str):
     
     try:
         # Fetch session data
+        session_url = os.getenv("SESSION_SERVICE_URL", "http://localhost:8000")
         sess_resp = requests.get(
-            "http://localhost:8000/session/restore",
+            f"{session_url}/session/restore",
             headers={"X-Session-Token": session_token},
             timeout=8
         )
@@ -573,8 +574,9 @@ async def handle_message(request: MessageRequest):
     
     if request.session_token:
         try:
+            session_url = os.getenv("SESSION_SERVICE_URL", "http://localhost:8000")
             sess_resp = requests.get(
-                "http://localhost:8000/session/restore",
+                f"{session_url}/session/restore",
                 headers={"X-Session-Token": request.session_token},
                 timeout=8
             )
@@ -752,9 +754,10 @@ Generate ONLY the welcome message (no extra text):"""
         if request.session_token:
             try:
                 base_headers = {"X-Session-Token": request.session_token}
+                session_url = os.getenv("SESSION_SERVICE_URL", "http://localhost:8000")
 
                 requests.post(
-                    "http://localhost:8000/session/update",
+                    f"{session_url}/session/update",
                     headers=base_headers,
                     json={
                         "action": "chat_message",
@@ -775,8 +778,9 @@ Generate ONLY the welcome message (no extra text):"""
                     "cards": result.get("cards", [])  # Include cards for SKU tracking
                 }
                 
+                session_url = os.getenv("SESSION_SERVICE_URL", "http://localhost:8000")
                 requests.post(
-                    "http://localhost:8000/session/update",
+                    f"{session_url}/session/update",
                     headers=base_headers,
                     json={
                         "action": "chat_message",

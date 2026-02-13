@@ -1,115 +1,151 @@
 // API Configuration for all backend services
+// 
+// 🚀 DEPLOYMENT NOTE:
+// After deploying backend to Render, update line 18 with your actual Render URL
+// Example: 'https://ey-codecrafters-backend.onrender.com'
+// OR set VITE_BACKEND_URL environment variable in Vercel
 
-const API_BASE_URL = 'http://localhost';
+// Detect environment and set base URL
+const getBaseURL = () => {
+  // Check for Vite environment variable (preferred for production)
+  const backendURL = import.meta.env.VITE_BACKEND_URL;
+  
+  if (backendURL) {
+    return backendURL.replace(/\/$/, ''); // Remove trailing slash
+  }
+  
+  // Check if we're in production (Vercel sets NODE_ENV)
+  if (import.meta.env.PROD) {
+    // ⚠️ REPLACE THIS with your actual Render URL after deployment
+    return 'https://your-render-app.onrender.com';
+  }
+  
+  // Default to localhost for development
+  return 'http://localhost';
+};
+
+const API_BASE_URL = getBaseURL();
+const IS_PRODUCTION = import.meta.env.PROD && !API_BASE_URL.includes('localhost');
+
+// Helper to build endpoint URL - production uses mounted paths
+const buildEndpoint = (path, port = null) => {
+  if (IS_PRODUCTION) {
+    // In production, all services are mounted under the main domain
+    return `${API_BASE_URL}${path}`;
+  }
+  // In development, services run on different ports
+  return `${API_BASE_URL}:${port}${path}`;
+};
 
 export const API_ENDPOINTS = {
-  // Session Management (Port 8000)
-  SESSION_MANAGER: `${API_BASE_URL}:8000`,
-  SESSION_START: `${API_BASE_URL}:8000/session/start`,
-  SESSION_END: `${API_BASE_URL}:8000/session/end`,
-  SESSION_UPDATE: `${API_BASE_URL}:8000/session/update`,
-  SESSION_LOGIN: `${API_BASE_URL}:8000/session/login`,
+  // Session Management (Port 8000 / /session in production)
+  SESSION_MANAGER: IS_PRODUCTION ? `${API_BASE_URL}/session` : `${API_BASE_URL}:8000`,
+  SESSION_START: buildEndpoint('/session/start', 8000),
+  SESSION_END: buildEndpoint('/session/end', 8000),
+  SESSION_UPDATE: buildEndpoint('/session/update', 8000),
+  SESSION_LOGIN: buildEndpoint('/session/login', 8000),
   
-  // Authentication (Password-based - Port 8000)
-  AUTH_SIGNUP: `${API_BASE_URL}:8000/auth/signup`,
-  AUTH_LOGIN: `${API_BASE_URL}:8000/auth/login`,
-  AUTH_LOGOUT: `${API_BASE_URL}:8000/auth/logout`,
-  AUTH_QR_INIT: `${API_BASE_URL}:8000/auth/qr-init`,
-  AUTH_QR_VERIFY: `${API_BASE_URL}:8000/auth/qr-verify`,
+  // Authentication (Password-based - Port 8000 / /session in production)
+  AUTH_SIGNUP: buildEndpoint('/auth/signup', 8000),
+  AUTH_LOGIN: buildEndpoint('/auth/login', 8000),
+  AUTH_LOGOUT: buildEndpoint('/auth/logout', 8000),
+  AUTH_QR_INIT: buildEndpoint('/auth/qr-init', 8000),
+  AUTH_QR_VERIFY: buildEndpoint('/auth/qr-verify', 8000),
   
-  // Sales Agent with Orchestration (Port 8010)
-  SALES_AGENT: `${API_BASE_URL}:8010`,
-  SEND_MESSAGE: `${API_BASE_URL}:8010/api/message`,
-  RESUME_SESSION: `${API_BASE_URL}:8010/api/resume_session`,
-  VISUAL_SEARCH: `${API_BASE_URL}:8010/api/visual-search`,
-  RECOMMENDATIONS: `${API_BASE_URL}:8010/api/recommendations`,
-  GIFT_SUGGESTIONS: `${API_BASE_URL}:8010/api/gift-suggestions`,
-  CHECKOUT: `${API_BASE_URL}:8010/api/checkout`,
-  POST_PAYMENT: `${API_BASE_URL}:8010/api/post-payment`,
-  VERIFY_INVENTORY: `${API_BASE_URL}:8010/api/verify-inventory`,
-  SEASONAL_TRENDS: `${API_BASE_URL}:8010/api/seasonal-trends`,
+  // Sales Agent with Orchestration (Port 8010 / /sales in production)
+  SALES_AGENT: IS_PRODUCTION ? `${API_BASE_URL}/sales` : `${API_BASE_URL}:8010`,
+  SEND_MESSAGE: buildEndpoint('/sales/api/message', 8010),
+  RESUME_SESSION: buildEndpoint('/sales/api/resume_session', 8010),
+  VISUAL_SEARCH: buildEndpoint('/sales/api/visual-search', 8010),
+  RECOMMENDATIONS: buildEndpoint('/sales/api/recommendations', 8010),
+  GIFT_SUGGESTIONS: buildEndpoint('/sales/api/gift-suggestions', 8010),
+  CHECKOUT: buildEndpoint('/sales/api/checkout', 8010),
+  POST_PAYMENT: buildEndpoint('/sales/api/post-payment', 8010),
+  VERIFY_INVENTORY: buildEndpoint('/sales/api/verify-inventory', 8010),
+  SEASONAL_TRENDS: buildEndpoint('/sales/api/seasonal-trends', 8010),
 
   // Inventory Agent
-  INVENTORY: `${API_BASE_URL}:8001`,
-  INVENTORY_CHECK: `${API_BASE_URL}:8001/inventory`,
-  INVENTORY_HOLD: `${API_BASE_URL}:8001/hold`,
-  INVENTORY_RELEASE: `${API_BASE_URL}:8001/release`,
-  INVENTORY_SIMULATE_SALE: `${API_BASE_URL}:8001/simulate/sale`,
+  INVENTORY: IS_PRODUCTION ? `${API_BASE_URL}/inventory` : `${API_BASE_URL}:8001`,
+  INVENTORY_CHECK: buildEndpoint('/inventory', 8001),
+  INVENTORY_HOLD: buildEndpoint('/inventory/hold', 8001),
+  INVENTORY_RELEASE: buildEndpoint('/inventory/release', 8001),
+  INVENTORY_SIMULATE_SALE: buildEndpoint('/inventory/simulate/sale', 8001),
 
   // Loyalty Agent
-  LOYALTY: `${API_BASE_URL}:8002`,
-  LOYALTY_POINTS: `${API_BASE_URL}:8002/loyalty/points`,
-  LOYALTY_TIER_INFO: `${API_BASE_URL}:8002/loyalty/tier`,
-  LOYALTY_APPLY: `${API_BASE_URL}:8002/loyalty/apply`,
-  LOYALTY_ADD_POINTS: `${API_BASE_URL}:8002/loyalty/add-points`,
-  LOYALTY_VALIDATE_COUPON: `${API_BASE_URL}:8002/loyalty/validate-coupon`,
-  LOYALTY_PROMOTIONS: `${API_BASE_URL}:8002/loyalty/available-promotions`,
+  LOYALTY: IS_PRODUCTION ? `${API_BASE_URL}/loyalty` : `${API_BASE_URL}:8002`,
+  LOYALTY_POINTS: buildEndpoint('/loyalty/points', 8002),
+  LOYALTY_TIER_INFO: buildEndpoint('/loyalty/tier', 8002),
+  LOYALTY_APPLY: buildEndpoint('/loyalty/apply', 8002),
+  LOYALTY_ADD_POINTS: buildEndpoint('/loyalty/add-points', 8002),
+  LOYALTY_VALIDATE_COUPON: buildEndpoint('/loyalty/validate-coupon', 8002),
+  LOYALTY_PROMOTIONS: buildEndpoint('/loyalty/available-promotions', 8002),
 
   // Payment Agent (proxied through Sales Agent)
-  PAYMENT: `${API_BASE_URL}:8010/api/payment`,
-  PAYMENT_PROCESS: `${API_BASE_URL}:8010/api/payment/process`,
-  PAYMENT_TRANSACTION: `${API_BASE_URL}:8010/api/payment/transaction`,
-  PAYMENT_USER_TRANSACTIONS: `${API_BASE_URL}:8010/api/payment/user-transactions`,
-  PAYMENT_METHODS: `${API_BASE_URL}:8010/api/payment/methods`,
-  PAYMENT_REFUND: `${API_BASE_URL}:8010/api/payment/refund`,
-  PAYMENT_AUTHORIZE: `${API_BASE_URL}:8010/api/payment/authorize`,
-  PAYMENT_CAPTURE: `${API_BASE_URL}:8010/api/payment/capture`,
-  PAYMENT_NEXT_ORDER_ID: `${API_BASE_URL}:8010/api/payment/next-order-id`,
-  PAYMENT_RAZORPAY_CREATE: `${API_BASE_URL}:8010/api/payment/razorpay/create-order`,
-  PAYMENT_RAZORPAY_VERIFY: `${API_BASE_URL}:8010/api/payment/razorpay/verify-payment`,
+  PAYMENT: buildEndpoint('/sales/api/payment', 8010),
+  PAYMENT_PROCESS: buildEndpoint('/sales/api/payment/process', 8010),
+  PAYMENT_TRANSACTION: buildEndpoint('/sales/api/payment/transaction', 8010),
+  PAYMENT_USER_TRANSACTIONS: buildEndpoint('/sales/api/payment/user-transactions', 8010),
+  PAYMENT_METHODS: buildEndpoint('/sales/api/payment/methods', 8010),
+  PAYMENT_REFUND: buildEndpoint('/sales/api/payment/refund', 8010),
+  PAYMENT_AUTHORIZE: buildEndpoint('/sales/api/payment/authorize', 8010),
+  PAYMENT_CAPTURE: buildEndpoint('/sales/api/payment/capture', 8010),
+  PAYMENT_NEXT_ORDER_ID: buildEndpoint('/sales/api/payment/next-order-id', 8010),
+  PAYMENT_RAZORPAY_CREATE: buildEndpoint('/sales/api/payment/razorpay/create-order', 8010),
+  PAYMENT_RAZORPAY_VERIFY: buildEndpoint('/sales/api/payment/razorpay/verify-payment', 8010),
 
   // Fulfillment Agent
-  FULFILLMENT: `${API_BASE_URL}:8004`,
-  FULFILLMENT_START: `${API_BASE_URL}:8004/fulfillment/start`,
-  FULFILLMENT_STATUS: `${API_BASE_URL}:8004/fulfillment`,
-  FULFILLMENT_UPDATE: `${API_BASE_URL}:8004/fulfillment/update-status`,
-  FULFILLMENT_DELIVERED: `${API_BASE_URL}:8004/fulfillment/mark-delivered`,
-  FULFILLMENT_CANCEL: `${API_BASE_URL}:8004/fulfillment/cancel-order`,
-  FULFILLMENT_SET_DELIVERY_WINDOW: `${API_BASE_URL}:8004/fulfillment/set-delivery-window`,
+  FULFILLMENT: IS_PRODUCTION ? `${API_BASE_URL}/fulfillment` : `${API_BASE_URL}:8004`,
+  FULFILLMENT_START: buildEndpoint('/fulfillment/start', 8004),
+  FULFILLMENT_STATUS: buildEndpoint('/fulfillment', 8004),
+  FULFILLMENT_UPDATE: buildEndpoint('/fulfillment/update-status', 8004),
+  FULFILLMENT_DELIVERED: buildEndpoint('/fulfillment/mark-delivered', 8004),
+  FULFILLMENT_CANCEL: buildEndpoint('/fulfillment/cancel-order', 8004),
+  FULFILLMENT_SET_DELIVERY_WINDOW: buildEndpoint('/fulfillment/set-delivery-window', 8004),
 
   // Post-Purchase Agent
-  POST_PURCHASE: `${API_BASE_URL}:8005`,
-  POST_PURCHASE_RETURN: `${API_BASE_URL}:8005/post-purchase/return`,
-  POST_PURCHASE_EXCHANGE: `${API_BASE_URL}:8005/post-purchase/exchange`,
-  POST_PURCHASE_COMPLAINT: `${API_BASE_URL}:8005/post-purchase/complaint`,
-  POST_PURCHASE_FEEDBACK: `${API_BASE_URL}:8005/post-purchase/feedback`,
-  POST_PURCHASE_RETURN_REASONS: `${API_BASE_URL}:8005/post-purchase/return-reasons`,
-  POST_PURCHASE_RETURNS: `${API_BASE_URL}:8005/post-purchase/returns`,
-  POST_PURCHASE_ISSUE_TYPES: `${API_BASE_URL}:8005/post-purchase/issue-types`,
-  POST_PURCHASE_REGISTER_ORDER: `${API_BASE_URL}:8005/post-purchase/register-order`,
+  POST_PURCHASE: IS_PRODUCTION ? `${API_BASE_URL}/post-purchase` : `${API_BASE_URL}:8005`,
+  POST_PURCHASE_RETURN: buildEndpoint('/post-purchase/return', 8005),
+  POST_PURCHASE_EXCHANGE: buildEndpoint('/post-purchase/exchange', 8005),
+  POST_PURCHASE_COMPLAINT: buildEndpoint('/post-purchase/complaint', 8005),
+  POST_PURCHASE_FEEDBACK: buildEndpoint('/post-purchase/feedback', 8005),
+  POST_PURCHASE_RETURN_REASONS: buildEndpoint('/post-purchase/return-reasons', 8005),
+  POST_PURCHASE_RETURNS: buildEndpoint('/post-purchase/returns', 8005),
+  POST_PURCHASE_ISSUE_TYPES: buildEndpoint('/post-purchase/issue-types', 8005),
+  POST_PURCHASE_REGISTER_ORDER: buildEndpoint('/post-purchase/register-order', 8005),
 
   // Stylist Agent
-  STYLIST: `${API_BASE_URL}:8006`,
-  STYLIST_OUTFIT_SUGGESTIONS: `${API_BASE_URL}:8006/stylist/outfit-suggestions`,
-  STYLIST_CARE_INSTRUCTIONS: `${API_BASE_URL}:8006/stylist/care-instructions`,
-  STYLIST_OCCASION: `${API_BASE_URL}:8006/stylist/occasion-styling`,
-  STYLIST_SEASONAL: `${API_BASE_URL}:8006/stylist/seasonal-styling`,
-  STYLIST_FIT_FEEDBACK: `${API_BASE_URL}:8006/stylist/fit-feedback`,
+  STYLIST: IS_PRODUCTION ? `${API_BASE_URL}/stylist` : `${API_BASE_URL}:8006`,
+  STYLIST_OUTFIT_SUGGESTIONS: buildEndpoint('/stylist/outfit-suggestions', 8006),
+  STYLIST_CARE_INSTRUCTIONS: buildEndpoint('/stylist/care-instructions', 8006),
+  STYLIST_OCCASION: buildEndpoint('/stylist/occasion-styling', 8006),
+  STYLIST_SEASONAL: buildEndpoint('/stylist/seasonal-styling', 8006),
+  STYLIST_FIT_FEEDBACK: buildEndpoint('/stylist/fit-feedback', 8006),
   
   // Data API (CSV Data + Supabase Products)
-  DATA_API: `${API_BASE_URL}:8007`,
-  DATA_PRODUCTS: `${API_BASE_URL}:8007/products`,
-  DATA_CUSTOMERS: `${API_BASE_URL}:8007/customers`,
-  DATA_ORDERS: `${API_BASE_URL}:8007/orders`,
-  DATA_STORES: `${API_BASE_URL}:8007/stores`,
-  DATA_INVENTORY: `${API_BASE_URL}:8007/inventory`,
-  DATA_PAYMENTS: `${API_BASE_URL}:8007/payments`,
+  DATA_API: IS_PRODUCTION ? `${API_BASE_URL}/data` : `${API_BASE_URL}:8007`,
+  DATA_PRODUCTS: buildEndpoint('/data/products', 8007),
+  DATA_CUSTOMERS: buildEndpoint('/data/customers', 8007),
+  DATA_ORDERS: buildEndpoint('/data/orders', 8007),
+  DATA_STORES: buildEndpoint('/data/stores', 8007),
+  DATA_INVENTORY: buildEndpoint('/data/inventory', 8007),
+  DATA_PAYMENTS: buildEndpoint('/data/payments', 8007),
   
   // Recommendation Agent
-  RECOMMENDATION: `${API_BASE_URL}:8008`,
-  RECOMMENDATION_PERSONALIZED: `${API_BASE_URL}:8008/recommend`,
+  RECOMMENDATION: IS_PRODUCTION ? `${API_BASE_URL}/recommendation` : `${API_BASE_URL}:8008`,
+  RECOMMENDATION_PERSONALIZED: buildEndpoint('/recommendation/recommend', 8008),
   
   // Ambient Commerce (Visual Search)
-  AMBIENT_COMMERCE: `${API_BASE_URL}:8017`,
-  VISUAL_SEARCH_IMAGE: `${API_BASE_URL}:8017/search/image`,
-  // Virtual Circles (Community Chat)
-  VIRTUAL_CIRCLES: `${API_BASE_URL}:8009`,
+  AMBIENT_COMMERCE: IS_PRODUCTION ? `${API_BASE_URL}/ambient` : `${API_BASE_URL}:8017`,
+  VISUAL_SEARCH_IMAGE: buildEndpoint('/ambient/search/image', 8017),
   
-  // Sales Agent Memory Endpoints (Port 8000)
-  SESSION_CONTEXT: `${API_BASE_URL}:8000/session/{id}/context`,
-  SESSION_SUMMARY: `${API_BASE_URL}:8000/session/{id}/summary`,
-  SESSION_RECOMMENDATIONS: `${API_BASE_URL}:8000/session/{id}/recommendations`,
-  SESSION_CART: `${API_BASE_URL}:8000/session/{id}/cart`,
+  // Virtual Circles (Community Chat)
+  VIRTUAL_CIRCLES: IS_PRODUCTION ? `${API_BASE_URL}/virtual-circles` : `${API_BASE_URL}:8009`,
+  
+  // Sales Agent Memory Endpoints (Port 8000 / /session in production)
+  SESSION_CONTEXT: buildEndpoint('/session/{id}/context', 8000),
+  SESSION_SUMMARY: buildEndpoint('/session/{id}/summary', 8000),
+  SESSION_RECOMMENDATIONS: buildEndpoint('/session/{id}/recommendations', 8000),
+  SESSION_CART: buildEndpoint('/session/{id}/cart', 8000),
 };
 
 // Helper function for API calls with error handling
