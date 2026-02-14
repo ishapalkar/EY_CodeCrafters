@@ -98,6 +98,13 @@ app.add_middleware(
 
 # Import and mount sub-applications
 try:
+    from auth_api import app as auth_app
+    app.mount("/auth", auth_app)
+    print("✓ Mounted Authentication API")
+except Exception as e:
+    print(f"⚠ Could not mount Authentication API: {e}")
+
+try:
     from session_manager import app as session_app
     app.mount("/session", session_app)
     print("✓ Mounted Session Manager")
@@ -195,6 +202,7 @@ async def root():
         "status": "running",
         "version": "1.0.0",
         "endpoints": {
+            "auth": "/auth",
             "session": "/session",
             "data": "/data",
             "sales": "/sales",

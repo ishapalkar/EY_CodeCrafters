@@ -1,7 +1,4 @@
 # --- Agent Frameworks ---
-langchain
-langchain-core
-langchain-community
 langgraph
 
 # --- LLM Providers ---
@@ -12,9 +9,6 @@ groq
 google-cloud-aiplatform
 vertexai
 
-# --- Vector Store for RAG ---
-chromadb
-sentence-transformers
 
 # --- Backend API ---
 fastapi
@@ -28,6 +22,7 @@ pydantic
 
 # --- Data processing ---
 pandas
+numpy
 
 # --- Password hashing ---
 bcrypt
