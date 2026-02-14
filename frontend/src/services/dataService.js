@@ -3,9 +3,9 @@
  * Products, Customers, Orders, Stores, Inventory, Payments
  */
 
-import { apiCall } from '../config/api';
+import { apiCall, API_ENDPOINTS } from '../config/api';
 
-const DATA_SERVICE = 'http://localhost:8007';
+const DATA_SERVICE = API_ENDPOINTS.DATA_API;
 
 export const dataService = {
   /**

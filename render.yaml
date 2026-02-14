@@ -4,7 +4,7 @@ services:
     name: ey-codecrafters-backend
     runtime: python
     buildCommand: pip install -r backend/requirements.txt
-    startCommand: python backend/start_all_services.py
+    startCommand: python backend/start_production.py
     envVars:
       # LLM Configuration
       - key: LLM_PROVIDER
