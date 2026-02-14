@@ -16,8 +16,8 @@ const getBaseURL = () => {
   
   // Check if we're in production (Vercel sets NODE_ENV)
   if (import.meta.env.PROD) {
-    // ⚠️ REPLACE THIS with your actual Render URL after deployment
-    return 'https://your-render-app.onrender.com';
+    // Update this with your actual Render URL after deployment
+    return 'https://ey-code-crafters.onrender.com';
   }
   
   // Default to localhost for development

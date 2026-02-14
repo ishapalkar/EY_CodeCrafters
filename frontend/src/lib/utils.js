@@ -1,5 +1,6 @@
 import { clsx } from "clsx"
 import { twMerge } from "tailwind-merge"
+import { API_BASE_URL } from "../config/api"
 
 export function cn(...inputs) {
   return twMerge(clsx(inputs))
@@ -27,9 +28,13 @@ export function resolveImageUrl(imagePath) {
     return imagePath;
   }
   
-  // Relative path from CSV - construct backend URL
-  // Strip 'product_images/' prefix since /images already serves from that folder
+  // Relative path from CSV - serve from frontend public folder
+  // Convert CSV format (product1.jpg) to actual filename format (product_1.jpeg)
   let cleanPath = imagePath.replace(/\\/g, '/').replace(/^\/+/, '');
   cleanPath = cleanPath.replace(/^product_images\//, '');
-  return `http://localhost:8007/images/${cleanPath}`;
+  
+  // Convert product1.jpg to product_1.jpeg
+  cleanPath = cleanPath.replace(/^product(\d+)\.jpg$/, 'product_$1.jpeg');
+  
+  return `/product_images/${cleanPath}`;
 }

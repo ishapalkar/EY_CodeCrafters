@@ -130,16 +130,31 @@ async def login(request: PasswordLoginRequest):
     """Authenticate user with phone and password."""
     try:
         # Validate credentials
-        customer = validate_login(request.phone_number, request.password)
-
-        if not customer:
+        result = validate_login(request.phone_number, request.password)
+        
+        if isinstance(result, tuple) and len(result) == 2:
+            success, customer = result
+        else:
+            raise HTTPException(status_code=500, detail="Invalid login result format")
+        
+        if not success or not customer:
             raise HTTPException(status_code=401, detail="Invalid phone number or password")
+
+        if not isinstance(customer, dict):
+            raise HTTPException(status_code=500, detail=f"Customer data is not a dict: {type(customer)}")
+
+        customer_id = customer.get("customer_id")
+        if customer_id is None:
+            raise HTTPException(status_code=500, detail="Customer ID not found")
+        
+        # Ensure customer_id is a string
+        customer_id = str(customer_id)
 
         # Create session for authenticated user
         token, session = create_session(
             phone=request.phone_number,
             channel=request.channel,
-            customer_id=str(customer.get("customer_id")),
+            customer_id=customer_id,
             customer_profile=customer,
         )
 
@@ -154,22 +169,42 @@ async def login(request: PasswordLoginRequest):
         raise
     except Exception as e:
         logger.error(f"Login error: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.post("/qr-init")
-async def qr_init(request: QRInitRequest):
+async def qr_init(
+    request: QRInitRequest,
+    x_session_token: Optional[str] = Header(None, alias="X-Session-Token")
+):
     """Generate QR token for kiosk authentication."""
     try:
-        qr_token = generate_qr_token(request.phone_number)
+        if not x_session_token:
+            raise HTTPException(status_code=401, detail="Must be logged in to generate QR code")
+
+        # Get session to verify user and get customer_id
+        from session_manager import get_session
+        try:
+            session = get_session(x_session_token)
+        except HTTPException:
+            raise HTTPException(status_code=401, detail="Invalid session")
+
+        customer_id = session.get("customer_id") or session.get("user_id")
+        if not customer_id:
+            raise HTTPException(status_code=400, detail="Customer ID not found in session")
+
+        qr_token = generate_qr_token(request.phone_number, str(customer_id))
 
         return JSONResponse(status_code=200, content={
             "qr_token": qr_token,
+            "customer_id": customer_id,
             "message": "QR token generated successfully",
         })
 
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"QR init error: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
@@ -179,14 +214,29 @@ async def qr_init(request: QRInitRequest):
 async def qr_verify(request: QRVerifyRequest):
     """Verify QR token and create session for kiosk."""
     try:
-        customer = verify_qr_token(request.qr_token, request.phone_number)
+        # Verify QR token
+        valid, customer_info = verify_qr_token(request.qr_token)
 
-        if not customer:
+        if not valid or not customer_info:
             raise HTTPException(status_code=401, detail="Invalid or expired QR token")
+
+        # Get customer record
+        from db.repositories.customer_repo import get_customer_by_phone
+        try:
+            customer = get_customer_by_phone(customer_info['phone'])
+        except:
+            # Fallback: load from CSV
+            import pandas as pd
+            df = pd.read_csv(Path(__file__).parent / "data" / "customers.csv")
+            matches = df[df['phone_number'].astype(str) == str(customer_info['phone'])]
+            if len(matches) > 0:
+                customer = matches.iloc[0].to_dict()
+            else:
+                customer = {"customer_id": customer_info['customer_id'], "phone_number": customer_info['phone']}
 
         # Create session for kiosk
         token, session = create_session(
-            phone=request.phone_number,
+            phone=customer_info['phone'],
             channel="kiosk",
             customer_id=str(customer.get("customer_id")),
             customer_profile=customer,
