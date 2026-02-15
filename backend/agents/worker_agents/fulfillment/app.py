@@ -25,7 +25,7 @@ from datetime import datetime, timedelta
 import random
 import logging
 import httpx
-import redis_utils
+from . import redis_utils
 import json
 import sys
 from pathlib import Path

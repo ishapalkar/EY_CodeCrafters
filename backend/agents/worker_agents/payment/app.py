@@ -22,7 +22,7 @@ try:
 except ImportError:  # pragma: no cover - dependency managed via requirements
     razorpay = None
 
-import redis_utils
+from . import redis_utils
 import payment_repository
 import sys
 from pathlib import Path

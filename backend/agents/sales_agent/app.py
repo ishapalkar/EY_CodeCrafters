@@ -28,8 +28,8 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv(Path(__file__).parent / '.env')
 
-# Import LangGraph Sales Agent (absolute import for direct uvicorn execution)
-from sales_graph import process_message as process_with_langgraph
+# Import LangGraph Sales Agent (relative import)
+from .sales_graph import process_message as process_with_langgraph
 
 # Configure logging
 logging.basicConfig(

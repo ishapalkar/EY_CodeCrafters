@@ -8,7 +8,7 @@ from typing import Optional
 import uvicorn
 import uuid
 from datetime import datetime
-import redis_utils
+from . import redis_utils
 
 app = FastAPI(
     title="Inventory Agent",

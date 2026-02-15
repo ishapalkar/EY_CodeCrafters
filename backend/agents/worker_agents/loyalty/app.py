@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from typing import Optional
 import uvicorn
 from datetime import datetime
-import redis_utils
+from . import redis_utils
 import sys
 from pathlib import Path
 

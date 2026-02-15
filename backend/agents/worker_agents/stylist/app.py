@@ -17,7 +17,7 @@ from typing import Optional, List, Dict, Any
 import uvicorn
 import uuid
 from datetime import datetime
-import redis_utils
+from . import redis_utils
 import os
 from groq import Groq
 

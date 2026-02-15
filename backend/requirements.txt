@@ -37,6 +37,9 @@ razorpay
 # --- Environment variables ---
 python-dotenv
 
+# --- Supabase Database ---
+supabase
+
 # --- Redis Database ---
 redis
 

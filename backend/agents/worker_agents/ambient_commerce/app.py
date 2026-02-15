@@ -17,9 +17,9 @@ from datetime import datetime
 import requests
 import re
 
-from feature_extractor import FeatureExtractor
-from index_builder import FAISSIndexBuilder
-import redis_utils
+from .feature_extractor import FeatureExtractor
+from .index_builder import FAISSIndexBuilder
+from . import redis_utils
 
 app = FastAPI(
     title="Ambient Commerce Integrator Agent",
