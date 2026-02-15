@@ -80,6 +80,7 @@ app = FastAPI(
     version="1.0.0",
     description="Production backend API for EY CodeCrafters"
 )
+print("FastAPI app created")
 
 # Configure CORS - Update with your actual Vercel domain
 allowed_origins = [
@@ -225,9 +226,14 @@ async def health():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-        log_level="info"
-    )
+    print(f"Starting server on port {port}")
+    try:
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=port,
+            log_level="info"
+        )
+    except Exception as e:
+        print(f"Failed to start server: {e}")
+        raise

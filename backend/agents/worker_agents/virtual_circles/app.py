@@ -23,16 +23,7 @@ import json
 import math
 import os
 from pathlib import Path
-import google.generativeai as genai
-
-# Import redis_utils (handle both direct and module execution)
-try:
-    from . import redis_utils
-except ImportError:
-    import redis_utils
-
-# In-memory storage (defined before app initialization)
-customers_df = None
+import google.genai as genai
 products_df = None
 orders_df = None
 user_profiles = {}
