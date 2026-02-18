@@ -92,109 +92,109 @@ allowed_origins = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Import and mount sub-applications
-# try:
-#     from auth_api import app as auth_app
-#     app.mount("/auth", auth_app)
-#     print("✓ Mounted Authentication API")
-# except Exception as e:
-#     print(f"⚠ Could not mount Authentication API: {e}")
+try:
+    from auth_api import app as auth_app
+    app.mount("/auth", auth_app)
+    print("✓ Mounted Authentication API")
+except Exception as e:
+    print(f"⚠ Could not mount Authentication API: {e}")
 
-# try:
-#     from session_manager import app as session_app
-#     app.mount("/session", session_app)
-#     print("✓ Mounted Session Manager")
-# except Exception as e:
-#     print(f"⚠ Could not mount Session Manager: {e}")
+try:
+    from session_manager import app as session_app
+    app.mount("/session", session_app)
+    print("✓ Mounted Session Manager")
+except Exception as e:
+    print(f"⚠ Could not mount Session Manager: {e}")
 
-# try:
-#     from data_api import app as data_app
-#     app.mount("/data", data_app)
-#     print("✓ Mounted Data API")
-# except Exception as e:
-#     print(f"⚠ Could not mount Data API: {e}")
+try:
+    from data_api import app as data_app
+    app.mount("/data", data_app)
+    print("✓ Mounted Data API")
+except Exception as e:
+    print(f"⚠ Could not mount Data API: {e}")
 
-# try:
-#     from agents.sales_agent.app import app as sales_app
-#     app.mount("/sales", sales_app)
-#     print("✓ Mounted Sales Agent")
-# except Exception as e:
-#     print(f"⚠ Could not mount Sales Agent: {e}")
+try:
+    from agents.sales_agent.app import app as sales_app
+    app.mount("/sales", sales_app)
+    print("✓ Mounted Sales Agent")
+except Exception as e:
+    print(f"⚠ Could not mount Sales Agent: {e}")
 
-# try:
-#     from agents.worker_agents.inventory.app import app as inventory_app
-#     app.mount("/inventory", inventory_app)
-#     print("✓ Mounted Inventory Service")
-# except Exception as e:
-#     print(f"⚠ Could not mount Inventory: {e}")
+try:
+    from agents.worker_agents.inventory.app import app as inventory_app
+    app.mount("/inventory", inventory_app)
+    print("✓ Mounted Inventory Service")
+except Exception as e:
+    print(f"⚠ Could not mount Inventory: {e}")
 
-# try:
-#     from agents.worker_agents.loyalty.app import app as loyalty_app
-#     app.mount("/loyalty", loyalty_app)
-#     print("✓ Mounted Loyalty Service")
-# except Exception as e:
-#     print(f"⚠ Could not mount Loyalty: {e}")
+try:
+    from agents.worker_agents.loyalty.app import app as loyalty_app
+    app.mount("/loyalty", loyalty_app)
+    print("✓ Mounted Loyalty Service")
+except Exception as e:
+    print(f"⚠ Could not mount Loyalty: {e}")
 
-# try:
-#     from agents.worker_agents.payment.app import app as payment_app
-#     app.mount("/payment", payment_app)
-#     print("✓ Mounted Payment Service")
-# except Exception as e:
-#     print(f"⚠ Could not mount Payment: {e}")
+try:
+    from agents.worker_agents.payment.app import app as payment_app
+    app.mount("/payment", payment_app)
+    print("✓ Mounted Payment Service")
+except Exception as e:
+    print(f"⚠ Could not mount Payment: {e}")
 
-# try:
-#     from agents.worker_agents.fulfillment.app import app as fulfillment_app
-#     app.mount("/fulfillment", fulfillment_app)
-#     print("✓ Mounted Fulfillment Service")
-# except Exception as e:
-#     print(f"⚠ Could not mount Fulfillment: {e}")
+try:
+    from agents.worker_agents.fulfillment.app import app as fulfillment_app
+    app.mount("/fulfillment", fulfillment_app)
+    print("✓ Mounted Fulfillment Service")
+except Exception as e:
+    print(f"⚠ Could not mount Fulfillment: {e}")
 
-# try:
-#     from agents.worker_agents.post_purchase.app import app as post_purchase_app
-#     app.mount("/post-purchase", post_purchase_app)
-#     print("✓ Mounted Post Purchase Service")
-# except Exception as e:
-#     print(f"⚠ Could not mount Post Purchase: {e}")
+try:
+    from agents.worker_agents.post_purchase.app import app as post_purchase_app
+    app.mount("/post-purchase", post_purchase_app)
+    print("✓ Mounted Post Purchase Service")
+except Exception as e:
+    print(f"⚠ Could not mount Post Purchase: {e}")
 
-# try:
-#     from agents.worker_agents.stylist.app import app as stylist_app
-#     app.mount("/stylist", stylist_app)
-#     print("✓ Mounted Stylist Service")
-# except Exception as e:
-#     print(f"⚠ Could not mount Stylist: {e}")
+try:
+    from agents.worker_agents.stylist.app import app as stylist_app
+    app.mount("/stylist", stylist_app)
+    print("✓ Mounted Stylist Service")
+except Exception as e:
+    print(f"⚠ Could not mount Stylist: {e}")
 
-# try:
-#     from agents.worker_agents.recommendation.app import app as recommendation_app
-#     app.mount("/recommendation", recommendation_app)
-#     print("✓ Mounted Recommendation Service")
-# except Exception as e:
-#     print(f"⚠ Could not mount Recommendation: {e}")
+try:
+    from agents.worker_agents.recommendation.app import app as recommendation_app
+    app.mount("/recommendation", recommendation_app)
+    print("✓ Mounted Recommendation Service")
+except Exception as e:
+    print(f"⚠ Could not mount Recommendation: {e}")
 
-# try:
-#     from agents.worker_agents.virtual_circles.app import app as virtual_circles_app
-#     app.mount("/virtual-circles", virtual_circles_app)
-#     print("✓ Mounted Virtual Circles Service")
-# except Exception as e:
-#     print(f"⚠ Could not mount Virtual Circles: {e}")
+try:
+    from agents.worker_agents.virtual_circles.app import app as virtual_circles_app
+    app.mount("/virtual-circles", virtual_circles_app)
+    print("✓ Mounted Virtual Circles Service")
+except Exception as e:
+    print(f"⚠ Could not mount Virtual Circles: {e}")
 
-# try:
-#     from agents.worker_agents.ambient_commerce.app import app as ambient_app
-#     app.mount("/ambient", ambient_app)
-#     print("✓ Mounted Ambient Commerce Service")
-# except Exception as e:
-#     print(f"⚠ Could not mount Ambient Commerce: {e}")
+try:
+    from agents.worker_agents.ambient_commerce.app import app as ambient_app
+    app.mount("/ambient", ambient_app)
+    print("✓ Mounted Ambient Commerce Service")
+except Exception as e:
+    print(f"⚠ Could not mount Ambient Commerce: {e}")
 
-# try:
-#     from agents.worker_agents.telegram.app import app as telegram_app
-#     app.mount("/telegram", telegram_app)
-#     print("✓ Mounted Telegram Service")
-# except Exception as e:
-#     print(f"⚠ Could not mount Telegram: {e}")
+try:
+    from agents.worker_agents.telegram.app import app as telegram_app
+    app.mount("/telegram", telegram_app)
+    print("✓ Mounted Telegram Service")
+except Exception as e:
+    print(f"⚠ Could not mount Telegram: {e}")
 
 @app.get("/")
 async def root():
