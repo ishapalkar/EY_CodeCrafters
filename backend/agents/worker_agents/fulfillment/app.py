@@ -106,7 +106,8 @@ app.add_middleware(
 
 # Initialize scheduler for auto-progression
 scheduler = BackgroundScheduler()
-scheduler.start()
+if not os.getenv("PRODUCTION"):
+    scheduler.start()
 
 
 def _schedule_next_progression(order_id: str):

@@ -196,6 +196,18 @@ try:
 except Exception as e:
     print(f"⚠ Could not mount Telegram: {e}")
 
+@app.on_event("startup")
+async def startup_event():
+    # Load customer mappings
+    from session_manager import load_customer_mappings
+    load_customer_mappings()
+    
+    # Start scheduler
+    from agents.worker_agents.fulfillment.app import scheduler
+    if not scheduler.running:
+        scheduler.start()
+        print("Scheduler started")
+
 @app.get("/")
 async def root():
     return {

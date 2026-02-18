@@ -185,20 +185,26 @@ TELEGRAM_SESSIONS: Dict[str, str] = {}
 TELEGRAM_TO_PHONE: Dict[str, str] = {}
 
 # Load customers.csv to map phone numbers to customer IDs
-try:
-    data_path = Path(__file__).parent / "data" / "customers.csv"
-    customers_df = pd.read_csv(data_path)
-    for _, row in customers_df.iterrows():
-        phone = str(row['phone_number'])
-        customer_id = str(row['customer_id'])
-        PHONE_TO_CUSTOMER[phone] = customer_id
-        digits_only = "".join(ch for ch in phone if ch.isdigit())
-        if digits_only:
-            PHONE_TO_CUSTOMER[digits_only] = customer_id
-    logger.info(f"Loaded {len(PHONE_TO_CUSTOMER)} phone-to-customer mappings")
-except Exception as e:
-    logger.error(f"Failed to load customers.csv: {e}")
-    PHONE_TO_CUSTOMER = {}
+def load_customer_mappings():
+    global PHONE_TO_CUSTOMER
+    try:
+        data_path = Path(__file__).parent / "data" / "customers.csv"
+        customers_df = pd.read_csv(data_path)
+        for _, row in customers_df.iterrows():
+            phone = str(row['phone_number'])
+            customer_id = str(row['customer_id'])
+            PHONE_TO_CUSTOMER[phone] = customer_id
+            digits_only = "".join(ch for ch in phone if ch.isdigit())
+            if digits_only:
+                PHONE_TO_CUSTOMER[digits_only] = customer_id
+        logger.info(f"Loaded {len(PHONE_TO_CUSTOMER)} phone-to-customer mappings")
+    except Exception as e:
+        logger.error(f"Failed to load customers.csv: {e}")
+        PHONE_TO_CUSTOMER = {}
+
+# Load data if not in production
+if not os.getenv("PRODUCTION"):
+    load_customer_mappings()
 
 # No expiry: sessions remain active unless explicitly ended
 
