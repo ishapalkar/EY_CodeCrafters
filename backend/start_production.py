@@ -198,15 +198,20 @@ except Exception as e:
 
 @app.on_event("startup")
 async def startup_event():
-    # Load customer mappings
-    from session_manager import load_customer_mappings
-    load_customer_mappings()
+    # Load customer mappings in a thread
+    import threading
+    def load_data():
+        from session_manager import load_customer_mappings
+        load_customer_mappings()
+        
+        # Start scheduler
+        from agents.worker_agents.fulfillment.app import scheduler
+        if not scheduler.running:
+            scheduler.start()
+            print("Scheduler started")
     
-    # Start scheduler
-    from agents.worker_agents.fulfillment.app import scheduler
-    if not scheduler.running:
-        scheduler.start()
-        print("Scheduler started")
+    thread = threading.Thread(target=load_data)
+    thread.start()
 
 @app.get("/")
 async def root():
